@@ -1,0 +1,304 @@
+import AppKit
+import SwiftUI
+
+struct CommitDetailsView: View {
+    @ObservedObject var model: AppModel
+
+    var body: some View {
+        VSplitView {
+            changedFilesPane
+            diffPane
+        }
+        .background(Color(nsColor: .textBackgroundColor))
+    }
+
+    private var changedFilesPane: some View {
+        VStack(spacing: 0) {
+            PaneHeader(title: "변경 파일", systemImage: "doc.on.doc")
+            Divider()
+
+            if model.selectedCommit == nil {
+                DetailsPlaceholder(text: "변경 사항을 확인할 커밋 선택")
+            } else if model.isLoadingDetails {
+                ProgressView()
+                    .controlSize(.small)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if let details = model.selectedDetails {
+                VStack(spacing: 0) {
+                    CommitSummary(commit: details.commit)
+                    Divider()
+                    if details.files.isEmpty {
+                        DetailsPlaceholder(text: "변경된 파일이 없습니다")
+                    } else {
+                        ScrollView {
+                            LazyVStack(spacing: 0) {
+                                ForEach(details.files) { file in
+                                    Button {
+                                        model.selectChangedFile(file)
+                                    } label: {
+                                        HStack(spacing: 7) {
+                                            Text(file.status)
+                                                .font(.system(size: 10, weight: .bold, design: .monospaced))
+                                                .foregroundStyle(statusColor(file.status))
+                                                .frame(width: 18)
+                                            Image(systemName: "doc.text")
+                                                .foregroundStyle(.secondary)
+                                            Text(file.path)
+                                                .font(.system(size: 11))
+                                                .lineLimit(1)
+                                            Spacer(minLength: 0)
+                                        }
+                                        .padding(.horizontal, 9)
+                                        .frame(maxWidth: .infinity, minHeight: 25, alignment: .leading)
+                                        .background(
+                                            model.selectedFile?.id == file.id
+                                                ? Color.accentColor.opacity(0.14)
+                                                : .clear
+                                        )
+                                        .contentShape(Rectangle())
+                                    }
+                                    .buttonStyle(.plain)
+                                    .onContinuousHover { phase in
+                                        switch phase {
+                                        case .active:
+                                            NSCursor.pointingHand.set()
+                                        case .ended:
+                                            NSCursor.arrow.set()
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            } else {
+                DetailsPlaceholder(text: "커밋 정보를 불러오지 못했습니다")
+            }
+        }
+    }
+
+    private var diffPane: some View {
+        VStack(spacing: 0) {
+            PaneHeader(
+                title: model.selectedFile?.path ?? "커밋 세부 정보",
+                systemImage: "text.alignleft"
+            )
+            Divider()
+
+            if let commit = model.selectedCommit, model.selectedFile == nil {
+                CommitInformationView(commit: commit)
+            } else if model.selectedCommit == nil {
+                DetailsPlaceholder(text: "커밋 세부 정보")
+            } else if model.isLoadingPatch {
+                ProgressView()
+                    .controlSize(.small)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if let patch = model.selectedPatch, !patch.isEmpty {
+                DiffView(patch: patch)
+            } else {
+                DetailsPlaceholder(text: "표시할 diff가 없습니다")
+            }
+        }
+    }
+
+    private func statusColor(_ status: String) -> Color {
+        if status.hasPrefix("A") { return .green }
+        if status.hasPrefix("D") { return .red }
+        if status.hasPrefix("R") { return .blue }
+        return .orange
+    }
+}
+
+private struct CommitInformationView: View {
+    let commit: GitCommit
+
+    private var messageBody: String {
+        let body = commit.body.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard body.hasPrefix(commit.subject) else { return body }
+        return String(body.dropFirst(commit.subject.count))
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 14) {
+                Text(commit.subject.isEmpty ? "(메시지 없음)" : commit.subject)
+                    .font(.system(size: 13, weight: .semibold))
+                    .textSelection(.enabled)
+
+                if !messageBody.isEmpty {
+                    Text(messageBody)
+                        .font(.system(size: 11))
+                        .textSelection(.enabled)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                Divider()
+
+                CommitMetadataRow(
+                    title: "작성자",
+                    value: "\(commit.authorName) <\(commit.authorEmail)>",
+                    systemImage: "person.crop.circle"
+                )
+                CommitMetadataRow(
+                    title: "작성 시각",
+                    value: commit.authorDate.formatted(
+                        .dateTime.year().month().day().hour().minute().second()
+                    ),
+                    systemImage: "clock"
+                )
+                CommitMetadataRow(
+                    title: "커밋 해시",
+                    value: commit.id.oid,
+                    systemImage: "number",
+                    monospaced: true
+                )
+                CommitMetadataRow(
+                    title: "부모",
+                    value: commit.parentOIDs.isEmpty
+                        ? "없음"
+                        : commit.parentOIDs.joined(separator: "\n"),
+                    systemImage: "arrow.triangle.branch",
+                    monospaced: true
+                )
+            }
+            .padding(12)
+            .frame(maxWidth: .infinity, alignment: .topLeading)
+        }
+    }
+}
+
+private struct CommitMetadataRow: View {
+    let title: String
+    let value: String
+    let systemImage: String
+    var monospaced = false
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: systemImage)
+                .foregroundStyle(.secondary)
+                .frame(width: 14)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(title)
+                    .font(.system(size: 9, weight: .medium))
+                    .foregroundStyle(.secondary)
+                Text(value)
+                    .font(.system(size: 10.5, design: monospaced ? .monospaced : .default))
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+}
+
+private struct PaneHeader: View {
+    let title: String
+    let systemImage: String
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Image(systemName: systemImage)
+                .foregroundStyle(.secondary)
+            Text(title)
+                .font(.system(size: 11, weight: .semibold))
+            Spacer()
+        }
+        .padding(.horizontal, 9)
+        .frame(height: 28)
+        .background(Color(nsColor: .controlBackgroundColor))
+    }
+}
+
+private struct CommitSummary: View {
+    let commit: GitCommit
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            Text(commit.subject)
+                .font(.system(size: 12, weight: .semibold))
+                .textSelection(.enabled)
+            HStack(spacing: 6) {
+                Image(systemName: "person.crop.circle")
+                Text("\(commit.authorName) <\(commit.authorEmail)>")
+                Spacer()
+            }
+            .foregroundStyle(.secondary)
+            HStack(spacing: 6) {
+                Image(systemName: "number")
+                Text(commit.id.oid)
+                    .font(.system(size: 10, design: .monospaced))
+                    .textSelection(.enabled)
+            }
+            .foregroundStyle(.secondary)
+        }
+        .font(.system(size: 10))
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+private struct DetailsPlaceholder: View {
+    let text: String
+
+    var body: some View {
+        Text(text)
+            .font(.system(size: 11))
+            .foregroundStyle(.secondary)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+}
+
+private struct DiffView: View {
+    private struct DiffLine: Identifiable {
+        let id: Int
+        let text: String
+    }
+
+    private let lines: [DiffLine]
+
+    init(patch: String) {
+        lines = patch.components(separatedBy: .newlines)
+            .enumerated()
+            .map { DiffLine(id: $0.offset, text: $0.element) }
+    }
+
+    var body: some View {
+        GeometryReader { geometry in
+            ScrollView([.vertical, .horizontal]) {
+                LazyVStack(alignment: .leading, spacing: 0) {
+                    ForEach(lines) { line in
+                        Text(line.text.isEmpty ? " " : line.text)
+                            .font(.system(size: 10.5, design: .monospaced))
+                            .foregroundStyle(foreground(for: line.text))
+                            .padding(.horizontal, 7)
+                            .frame(minWidth: 900, minHeight: 17, alignment: .leading)
+                            .background(background(for: line.text))
+                            .textSelection(.enabled)
+                    }
+                }
+                .frame(
+                    minWidth: max(geometry.size.width, 900),
+                    minHeight: geometry.size.height,
+                    alignment: .topLeading
+                )
+            }
+        }
+    }
+
+    private func foreground(for line: String) -> Color {
+        if line.hasPrefix("+++") || line.hasPrefix("---") || line.hasPrefix("@@") {
+            return .secondary
+        }
+        if line.hasPrefix("+") { return Color(red: 0.10, green: 0.45, blue: 0.20) }
+        if line.hasPrefix("-") { return Color(red: 0.72, green: 0.18, blue: 0.16) }
+        return .primary
+    }
+
+    private func background(for line: String) -> Color {
+        if line.hasPrefix("@@") { return Color.blue.opacity(0.08) }
+        if line.hasPrefix("+") && !line.hasPrefix("+++") { return Color.green.opacity(0.10) }
+        if line.hasPrefix("-") && !line.hasPrefix("---") { return Color.red.opacity(0.09) }
+        return .clear
+    }
+}

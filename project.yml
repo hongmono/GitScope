@@ -1,0 +1,29 @@
+name: GitScope
+options:
+  bundleIdPrefix: dev.hongmono
+  deploymentTarget:
+    macOS: "14.0"
+settings:
+  base:
+    ARCHS: arm64
+    SWIFT_VERSION: 6.0
+    MACOSX_DEPLOYMENT_TARGET: 14.0
+targets:
+  GitScope:
+    type: application
+    platform: macOS
+    sources:
+      - path: GitScopeApp
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.hongmono.gitscope
+        PRODUCT_NAME: GitScope
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_CFBundleDisplayName: GitScope
+        INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.developer-tools
+        ENABLE_APP_SANDBOX: NO
+        ENABLE_HARDENED_RUNTIME: YES
+        CODE_SIGN_STYLE: Automatic
+        SWIFT_STRICT_CONCURRENCY: complete
+    scheme:
+      gatherCoverageData: false
