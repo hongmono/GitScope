@@ -3,65 +3,78 @@ import Foundation
 enum CommitGraphLayout {
     static func makeRows(commits: [GitCommit]) -> [CommitRow] {
         let visibleCommitIDs = Set(commits.map(\.id))
-        var activeLanes: [CommitID?] = []
+        var activePaths: [ActivePath] = []
+        var nextPathID = 0
         var rows: [CommitRow] = []
         rows.reserveCapacity(commits.count)
 
         for commit in commits {
-            let incomingLanes = activeLanes.indices.filter {
-                activeLanes[$0] == commit.id
+            let topPaths = activePaths
+            let incomingLanes = topPaths.indices.filter {
+                topPaths[$0].target == commit.id
             }
-            let nodeLane: Int
+            let incomingPathIDs = Set(incomingLanes.map { topPaths[$0].id })
+            var bottomPaths = topPaths.filter { !incomingPathIDs.contains($0.id) }
+            let nodeTopLane = incomingLanes.first
+            let parentInsertionLane = nodeTopLane.map { lane in
+                topPaths.indices.prefix(lane).filter {
+                    !incomingPathIDs.contains(topPaths[$0].id)
+                }.count
+            } ?? bottomPaths.count
+            var parentPathIDs: [Int] = []
+            var newParentPaths: [ActivePath] = []
 
-            if let existingLane = incomingLanes.first {
-                nodeLane = existingLane
-            } else if let emptyLane = activeLanes.firstIndex(where: { $0 == nil }) {
-                nodeLane = emptyLane
-            } else {
-                nodeLane = activeLanes.count
-                activeLanes.append(nil)
-            }
-
-            let passThroughLanes = activeLanes.indices.filter {
-                !incomingLanes.contains($0) && activeLanes[$0] != nil
-            }
-
-            for lane in incomingLanes {
-                activeLanes[lane] = nil
-            }
-
-            var parentLanes: [Int] = []
-            for (parentIndex, parentOID) in commit.parentOIDs.enumerated() {
+            for parentOID in commit.parentOIDs {
                 let parentID = CommitID(repositoryID: commit.id.repositoryID, oid: parentOID)
                 guard visibleCommitIDs.contains(parentID) else { continue }
-
-                let preferredLane: Int?
-                if parentIndex == 0 && activeLanes[nodeLane] == nil {
-                    preferredLane = nodeLane
-                } else {
-                    preferredLane = activeLanes.firstIndex(where: { $0 == nil })
-                }
-
-                let parentLane: Int
-                if let preferredLane {
-                    parentLane = preferredLane
-                    activeLanes[parentLane] = parentID
-                } else {
-                    parentLane = activeLanes.count
-                    activeLanes.append(parentID)
-                }
-                parentLanes.append(parentLane)
+                let path = ActivePath(
+                    id: nextPathID,
+                    target: parentID
+                )
+                nextPathID += 1
+                newParentPaths.append(path)
+                parentPathIDs.append(path.id)
             }
 
-            while let lastLane = activeLanes.last, lastLane == nil {
-                activeLanes.removeLast()
+            if !newParentPaths.isEmpty {
+                bottomPaths.insert(
+                    contentsOf: newParentPaths,
+                    at: min(parentInsertionLane, bottomPaths.count)
+                )
             }
 
+            let bottomLanesByPathID = Dictionary(
+                uniqueKeysWithValues: bottomPaths.enumerated().map {
+                    ($0.element.id, $0.offset)
+                }
+            )
+            let passThroughConnections = topPaths.enumerated().compactMap {
+                topLane, path -> GraphLaneConnection? in
+                guard !incomingPathIDs.contains(path.id),
+                      let bottomLane = bottomLanesByPathID[path.id] else {
+                    return nil
+                }
+                return GraphLaneConnection(
+                    incomingLane: topLane,
+                    outgoingLane: bottomLane
+                )
+            }
+            let parentLanes = parentPathIDs.compactMap {
+                bottomLanesByPathID[$0]
+            }
+            let nodeLane = nodeTopLane
+                ?? parentLanes.first
+                ?? bottomPaths.count
             let highestLane = max(
                 nodeLane,
                 max(
                     incomingLanes.max() ?? 0,
-                    max(passThroughLanes.max() ?? 0, parentLanes.max() ?? 0)
+                    max(
+                        passThroughConnections.flatMap {
+                            [$0.incomingLane, $0.outgoingLane]
+                        }.max() ?? 0,
+                        parentLanes.max() ?? 0
+                    )
                 )
             )
             rows.append(
@@ -70,14 +83,20 @@ enum CommitGraphLayout {
                     graph: GraphRowLayout(
                         nodeLane: nodeLane,
                         incomingLanes: incomingLanes,
-                        passThroughLanes: passThroughLanes,
+                        passThroughConnections: passThroughConnections,
                         parentLanes: parentLanes,
                         laneCount: highestLane + 1
                     )
                 )
             )
+            activePaths = bottomPaths
         }
 
         return rows
+    }
+
+    private struct ActivePath {
+        let id: Int
+        let target: CommitID
     }
 }

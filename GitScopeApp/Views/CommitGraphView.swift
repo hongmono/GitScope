@@ -103,14 +103,53 @@ struct CommitGraphView: View {
             lineJoin: .round
         )
 
-        for lane in layout.passThroughLanes {
+        for connection in layout.passThroughConnections {
             var path = Path()
-            let x = laneX(lane)
-            path.move(to: CGPoint(x: x, y: 0))
-            path.addLine(to: CGPoint(x: x, y: size.height))
+            let incomingX = laneX(connection.incomingLane)
+            let outgoingX = laneX(connection.outgoingLane)
+            path.move(to: CGPoint(x: incomingX, y: 0))
+
+            if incomingX == outgoingX {
+                path.addLine(to: CGPoint(x: outgoingX, y: size.height))
+            } else {
+                let transitionY = connection.outgoingLane == layout.nodeLane
+                    ? centerY + (size.height - centerY) * 0.5
+                    : centerY * 0.5
+                let direction: CGFloat = outgoingX > incomingX ? 1 : -1
+                let cornerRadius = min(
+                    8,
+                    min(transitionY, size.height - transitionY) * 0.72,
+                    abs(outgoingX - incomingX) * 0.5
+                )
+                path.addLine(
+                    to: CGPoint(x: incomingX, y: transitionY - cornerRadius)
+                )
+                path.addQuadCurve(
+                    to: CGPoint(
+                        x: incomingX + direction * cornerRadius,
+                        y: transitionY
+                    ),
+                    control: CGPoint(x: incomingX, y: transitionY)
+                )
+                path.addLine(
+                    to: CGPoint(
+                        x: outgoingX - direction * cornerRadius,
+                        y: transitionY
+                    )
+                )
+                path.addQuadCurve(
+                    to: CGPoint(
+                        x: outgoingX,
+                        y: transitionY + cornerRadius
+                    ),
+                    control: CGPoint(x: outgoingX, y: transitionY)
+                )
+                path.addLine(to: CGPoint(x: outgoingX, y: size.height))
+            }
+
             context.stroke(
                 path,
-                with: .color(color(for: lane)),
+                with: .color(color(for: connection.incomingLane)),
                 style: strokeStyle
             )
         }

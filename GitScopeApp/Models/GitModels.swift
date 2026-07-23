@@ -281,10 +281,15 @@ extension GitHubActionsState {
     }
 }
 
+struct GraphLaneConnection: Sendable, Hashable {
+    let incomingLane: Int
+    let outgoingLane: Int
+}
+
 struct GraphRowLayout: Sendable, Hashable {
     let nodeLane: Int
     let incomingLanes: [Int]
-    let passThroughLanes: [Int]
+    let passThroughConnections: [GraphLaneConnection]
     let parentLanes: [Int]
     let laneCount: Int
 
