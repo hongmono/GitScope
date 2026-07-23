@@ -119,6 +119,17 @@ private struct CommitInformationView: View {
             .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
+    private var referenceDetails: String {
+        GitReference.Kind.allCases.compactMap { kind in
+            let names = commit.references
+                .filter { $0.kind == kind }
+                .map(\.shortName)
+            guard !names.isEmpty else { return nil }
+            return "\(referenceKindTitle(kind)): \(names.joined(separator: ", "))"
+        }
+        .joined(separator: "\n")
+    }
+
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
@@ -153,6 +164,13 @@ private struct CommitInformationView: View {
                     systemImage: "number",
                     monospaced: true
                 )
+                if !referenceDetails.isEmpty {
+                    CommitMetadataRow(
+                        title: "브랜치 및 태그",
+                        value: referenceDetails,
+                        systemImage: "point.3.connected.trianglepath.dotted"
+                    )
+                }
                 CommitMetadataRow(
                     title: "부모",
                     value: commit.parentOIDs.isEmpty
@@ -164,6 +182,14 @@ private struct CommitInformationView: View {
             }
             .padding(12)
             .frame(maxWidth: .infinity, alignment: .topLeading)
+        }
+    }
+
+    private func referenceKindTitle(_ kind: GitReference.Kind) -> String {
+        switch kind {
+        case .local: return "로컬"
+        case .remote: return "원격"
+        case .tag: return "태그"
         }
     }
 }

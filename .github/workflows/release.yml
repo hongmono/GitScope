@@ -21,6 +21,7 @@ env:
   PROJECT: GitScope.xcodeproj
   SCHEME: GitScope
   VERSION_PREFIX: "0.1"
+  DEVELOPMENT_TEAM: THG2GV26Z9
 
 jobs:
   validate:
@@ -68,6 +69,7 @@ jobs:
           APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
           APPLE_API_ISSUER_ID: ${{ secrets.APPLE_API_ISSUER_ID }}
           APPLE_API_PRIVATE_KEY: ${{ secrets.APPLE_API_PRIVATE_KEY }}
+          SPARKLE_ED_PRIVATE_KEY: ${{ secrets.SPARKLE_ED_PRIVATE_KEY }}
         run: |
           set -euo pipefail
           required_variables=(
@@ -77,6 +79,7 @@ jobs:
             APPLE_API_KEY_ID
             APPLE_API_ISSUER_ID
             APPLE_API_PRIVATE_KEY
+            SPARKLE_ED_PRIVATE_KEY
           )
 
           for variable in "${required_variables[@]}"; do
@@ -145,22 +148,17 @@ jobs:
             -derivedDataPath "$DERIVED_DATA" \
             ARCHS=arm64 \
             ONLY_ACTIVE_ARCH=NO \
-            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGN_STYLE=Manual \
+            CODE_SIGN_IDENTITY="$APPLE_SIGNING_IDENTITY" \
+            DEVELOPMENT_TEAM="$DEVELOPMENT_TEAM" \
+            MARKETING_VERSION="$VERSION" \
+            CURRENT_PROJECT_VERSION="$GITHUB_RUN_NUMBER" \
             build
 
           info_plist="$APP_PATH/Contents/Info.plist"
-          /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VERSION" "$info_plist" \
-            || /usr/libexec/PlistBuddy -c "Add :CFBundleShortVersionString string $VERSION" "$info_plist"
-          /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $GITHUB_RUN_NUMBER" "$info_plist" \
-            || /usr/libexec/PlistBuddy -c "Add :CFBundleVersion string $GITHUB_RUN_NUMBER" "$info_plist"
-
-          codesign \
-            --force \
-            --options runtime \
-            --timestamp \
-            --keychain "$KEYCHAIN_PATH" \
-            --sign "$APPLE_SIGNING_IDENTITY" \
-            "$APP_PATH"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$info_plist")" = "$VERSION"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$info_plist")" = "$GITHUB_RUN_NUMBER"
+          test -n "$(/usr/libexec/PlistBuddy -c 'Print :SUPublicEDKey' "$info_plist")"
           codesign --verify --deep --strict --verbose=2 "$APP_PATH"
 
       - name: Notarize app
@@ -202,6 +200,32 @@ jobs:
             echo "RELEASE_CHECKSUM=$archive.sha256"
           } >> "$GITHUB_ENV"
 
+      - name: Generate signed Sparkle appcast
+        env:
+          SPARKLE_ED_PRIVATE_KEY: ${{ secrets.SPARKLE_ED_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          sparkle_bin="$DERIVED_DATA/SourcePackages/artifacts/sparkle/Sparkle/bin"
+          generate_appcast="$sparkle_bin/generate_appcast"
+          appcast_dir="$RUNNER_TEMP/appcast"
+
+          test -x "$generate_appcast"
+          mkdir -p "$appcast_dir"
+          cp "$RELEASE_ARCHIVE" "$appcast_dir/"
+          printf '%s' "$SPARKLE_ED_PRIVATE_KEY" | "$generate_appcast" \
+            --ed-key-file - \
+            --download-url-prefix "https://github.com/$GITHUB_REPOSITORY/releases/download/$RELEASE_TAG/" \
+            --link "https://github.com/$GITHUB_REPOSITORY" \
+            --full-release-notes-url "https://github.com/$GITHUB_REPOSITORY/releases" \
+            "$appcast_dir"
+
+          appcast="$appcast_dir/appcast.xml"
+          test -s "$appcast"
+          grep -q 'sparkle:edSignature=' "$appcast"
+          grep -q 'sparkle-signatures:' "$appcast"
+          cp "$appcast" "$ARTIFACT_DIR/appcast.xml"
+          echo "RELEASE_APPCAST=$ARTIFACT_DIR/appcast.xml" >> "$GITHUB_ENV"
+
       - name: Publish GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -209,6 +233,7 @@ jobs:
           set -euo pipefail
           archive_name="$(basename "$RELEASE_ARCHIVE")"
           checksum_name="$(basename "$RELEASE_CHECKSUM")"
+          appcast_name="$(basename "$RELEASE_APPCAST")"
 
           if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             is_draft="$(gh release view "$RELEASE_TAG" \
@@ -223,6 +248,7 @@ jobs:
             gh release upload "$RELEASE_TAG" \
               "$RELEASE_ARCHIVE" \
               "$RELEASE_CHECKSUM" \
+              "$RELEASE_APPCAST" \
               --clobber \
               --repo "$GITHUB_REPOSITORY"
           else
@@ -235,6 +261,7 @@ jobs:
             gh release upload "$RELEASE_TAG" \
               "$RELEASE_ARCHIVE" \
               "$RELEASE_CHECKSUM" \
+              "$RELEASE_APPCAST" \
               --repo "$GITHUB_REPOSITORY"
           fi
 
@@ -244,6 +271,7 @@ jobs:
             --repo "$GITHUB_REPOSITORY")"
           grep -Fxq "$archive_name" <<< "$uploaded_assets"
           grep -Fxq "$checksum_name" <<< "$uploaded_assets"
+          grep -Fxq "$appcast_name" <<< "$uploaded_assets"
           gh release edit "$RELEASE_TAG" \
             --draft=false \
             --latest \

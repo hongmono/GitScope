@@ -4,6 +4,7 @@ import SwiftUI
 struct BranchSidebarView: View {
     @ObservedObject var model: AppModel
     @State private var expandedReferenceGroups: Set<GitReference.Kind> = [.local]
+    @State private var collapsedReferenceFolders: Set<String> = []
 
     private var normalizedSearch: String {
         model.branchSearch.trimmingCharacters(in: .whitespacesAndNewlines).localizedLowercase
@@ -74,16 +75,8 @@ struct BranchSidebarView: View {
                 }
 
                 if isReferenceGroupExpanded(kind) {
-                    ForEach(matching) { group in
-                        SidebarButton(
-                            title: referenceTitle(group),
-                            systemImage: referenceIcon(group),
-                            isSelected: model.selectedReferenceGroupID == group.id,
-                            accent: group.isCurrent ? .pink : .blue
-                        ) {
-                            model.selectReferenceGroup(group)
-                        }
-                        .padding(.leading, 20)
+                    ForEach(visibleReferenceTreeItems(groups: matching, kind: kind)) { item in
+                        referenceTreeItem(item, kind: kind)
                     }
                 }
             }
@@ -103,6 +96,97 @@ struct BranchSidebarView: View {
         }
     }
 
+    @ViewBuilder
+    private func referenceTreeItem(
+        _ item: ReferenceTreeItem,
+        kind: GitReference.Kind
+    ) -> some View {
+        switch item {
+        case let .reference(group, depth):
+            SidebarButton(
+                title: referenceTitle(group),
+                systemImage: referenceIcon(group),
+                isSelected: model.selectedReferenceGroupID == group.id,
+                accent: group.isCurrent ? .pink : .blue
+            ) {
+                model.selectReferenceGroup(group)
+            }
+            .padding(.leading, 20 + CGFloat(depth * 20))
+        case let .folder(folder, depth):
+            SidebarDisclosureButton(
+                title: folder.name,
+                systemImage: "folder",
+                isExpanded: isReferenceFolderExpanded(folder, kind: kind),
+                isSelected: false,
+                indent: 20 + CGFloat(depth * 20)
+            ) {
+                toggleReferenceFolder(folder, kind: kind)
+            }
+        }
+    }
+
+    private func visibleReferenceTreeItems(
+        groups: [MergedReferenceGroup],
+        kind: GitReference.Kind
+    ) -> [ReferenceTreeItem] {
+        let root = referenceTree(groups: groups)
+        var items: [ReferenceTreeItem] = []
+        appendVisibleReferenceTreeItems(
+            from: root,
+            kind: kind,
+            depth: 0,
+            to: &items
+        )
+        return items
+    }
+
+    private func appendVisibleReferenceTreeItems(
+        from folder: ReferenceFolder,
+        kind: GitReference.Kind,
+        depth: Int,
+        to items: inout [ReferenceTreeItem]
+    ) {
+        items.append(contentsOf: folder.references.map { .reference($0, depth: depth) })
+        for child in folder.children {
+            items.append(.folder(child, depth: depth))
+            if isReferenceFolderExpanded(child, kind: kind) {
+                appendVisibleReferenceTreeItems(
+                    from: child,
+                    kind: kind,
+                    depth: depth + 1,
+                    to: &items
+                )
+            }
+        }
+    }
+
+    private func isReferenceFolderExpanded(
+        _ folder: ReferenceFolder,
+        kind: GitReference.Kind
+    ) -> Bool {
+        !normalizedSearch.isEmpty || !collapsedReferenceFolders.contains(folderStateID(folder, kind: kind))
+    }
+
+    private func toggleReferenceFolder(
+        _ folder: ReferenceFolder,
+        kind: GitReference.Kind
+    ) {
+        guard normalizedSearch.isEmpty else { return }
+        let id = folderStateID(folder, kind: kind)
+        if collapsedReferenceFolders.contains(id) {
+            collapsedReferenceFolders.remove(id)
+        } else {
+            collapsedReferenceFolders.insert(id)
+        }
+    }
+
+    private func folderStateID(
+        _ folder: ReferenceFolder,
+        kind: GitReference.Kind
+    ) -> String {
+        "\(kind.rawValue)::\(folder.path)"
+    }
+
     private func filteredReferenceGroups(kind: GitReference.Kind) -> [MergedReferenceGroup] {
         let groups = model.mergedReferenceGroups.filter { $0.kind == kind }
         guard !normalizedSearch.isEmpty else { return groups }
@@ -116,10 +200,12 @@ struct BranchSidebarView: View {
 
     private func referenceTitle(_ group: MergedReferenceGroup) -> String {
         let names = repositoryNames(group)
+        let branchName = group.shortName.split(separator: "/").last.map(String.init)
+            ?? group.shortName
         guard names.count < model.repositories.count else {
-            return group.shortName
+            return branchName
         }
-        return "\(group.shortName) (\(names.joined(separator: ", ")))"
+        return "\(branchName) (\(names.joined(separator: ", ")))"
     }
 
     private func repositoryNames(_ group: MergedReferenceGroup) -> [String] {
@@ -134,6 +220,81 @@ struct BranchSidebarView: View {
         case .local: return group.isCurrent ? "tag.fill" : "point.3.connected.trianglepath.dotted"
         case .remote: return "network"
         case .tag: return "tag"
+        }
+    }
+
+    private func referenceTree(
+        groups: [MergedReferenceGroup]
+    ) -> ReferenceFolder {
+        let root = MutableReferenceFolder(name: "", path: "")
+        for group in groups {
+            let components = group.shortName.split(separator: "/").map(String.init)
+            guard components.count > 1 else {
+                root.references.append(group)
+                continue
+            }
+
+            var current = root
+            for component in components.dropLast() {
+                if let child = current.children[component] {
+                    current = child
+                } else {
+                    let path = current.path.isEmpty ? component : "\(current.path)/\(component)"
+                    let child = MutableReferenceFolder(name: component, path: path)
+                    current.children[component] = child
+                    current = child
+                }
+            }
+            current.references.append(group)
+        }
+        return root.snapshot()
+    }
+}
+
+private final class MutableReferenceFolder {
+    let name: String
+    let path: String
+    var children: [String: MutableReferenceFolder] = [:]
+    var references: [MergedReferenceGroup] = []
+
+    init(name: String, path: String) {
+        self.name = name
+        self.path = path
+    }
+
+    func snapshot() -> ReferenceFolder {
+        ReferenceFolder(
+            name: name,
+            path: path,
+            children: children.values
+                .map { $0.snapshot() }
+                .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending },
+            references: references.sorted {
+                $0.shortName.localizedStandardCompare($1.shortName) == .orderedAscending
+            }
+        )
+    }
+}
+
+private struct ReferenceFolder: Identifiable {
+    let name: String
+    let path: String
+    let children: [ReferenceFolder]
+    let references: [MergedReferenceGroup]
+
+    var id: String { path }
+}
+
+private enum ReferenceTreeItem: Identifiable {
+    case folder(ReferenceFolder, depth: Int)
+    case reference(MergedReferenceGroup, depth: Int)
+
+    var id: String {
+        switch self {
+        case let .folder(folder, _):
+            return "folder::\(folder.path)"
+        case let .reference(group, _):
+            return "reference::\(group.id)"
         }
     }
 }

@@ -8,22 +8,39 @@ settings:
     ARCHS: arm64
     SWIFT_VERSION: 6.0
     MACOSX_DEPLOYMENT_TARGET: 14.0
+packages:
+  Sparkle:
+    url: https://github.com/sparkle-project/Sparkle
+    exactVersion: 2.9.4
 targets:
   GitScope:
     type: application
     platform: macOS
     sources:
       - path: GitScopeApp
+    info:
+      path: GitScopeApp/Info.plist
+      properties:
+        CFBundleDisplayName: GitScope
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        LSApplicationCategoryType: public.app-category.developer-tools
+        SUFeedURL: https://github.com/hongmono/GitScope/releases/latest/download/appcast.xml
+        SUPublicEDKey: KHNNL8lXiV2YiQn694vO58zEUvEJawhQZe6h2Yw7l7k=
+        SUEnableAutomaticChecks: true
+        SUVerifyUpdateBeforeExtraction: true
+        SURequireSignedFeed: true
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: dev.hongmono.gitscope
         PRODUCT_NAME: GitScope
-        GENERATE_INFOPLIST_FILE: YES
-        INFOPLIST_KEY_CFBundleDisplayName: GitScope
-        INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.developer-tools
+        MARKETING_VERSION: 0.1.0
+        CURRENT_PROJECT_VERSION: 1
         ENABLE_APP_SANDBOX: NO
         ENABLE_HARDENED_RUNTIME: YES
         CODE_SIGN_STYLE: Automatic
         SWIFT_STRICT_CONCURRENCY: complete
+    dependencies:
+      - package: Sparkle
     scheme:
       gatherCoverageData: false

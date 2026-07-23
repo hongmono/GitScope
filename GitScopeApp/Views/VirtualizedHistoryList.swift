@@ -427,12 +427,24 @@ private struct VirtualizedHistoryCollection: NSViewRepresentable {
 @MainActor
 private final class HistoryCollectionItem: NSCollectionViewItem {
     private var hostingView: NSHostingView<AnyView>?
+    private var displayedCommit: GitCommit?
+    private var hoverTask: Task<Void, Never>?
+    private var popoverCloseTask: Task<Void, Never>?
+    private var referencesPopover: NSPopover?
     private let fadeDuration: TimeInterval = 0.10
     private let initialFadeAlpha: CGFloat = 0.55
 
     override func loadView() {
         view = NSView()
         view.wantsLayer = true
+        view.addTrackingArea(
+            NSTrackingArea(
+                rect: .zero,
+                options: [.mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect],
+                owner: self,
+                userInfo: nil
+            )
+        )
     }
 
     override func viewWillAppear() {
@@ -456,6 +468,43 @@ private final class HistoryCollectionItem: NSCollectionViewItem {
         super.viewDidDisappear()
         view.layer?.removeAllAnimations()
         view.alphaValue = 1
+        cancelReferencesPopover()
+    }
+
+    override func prepareForReuse() {
+        super.prepareForReuse()
+        displayedCommit = nil
+        cancelReferencesPopover()
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        super.mouseEntered(with: event)
+        guard let commit = displayedCommit, !commit.references.isEmpty else { return }
+        popoverCloseTask?.cancel()
+        popoverCloseTask = nil
+        guard referencesPopover == nil else { return }
+
+        hoverTask?.cancel()
+        hoverTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(1))
+            guard !Task.isCancelled,
+                  let self,
+                  self.displayedCommit?.id == commit.id else {
+                return
+            }
+            self.showReferencesPopover(for: commit)
+        }
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        super.mouseExited(with: event)
+        hoverTask?.cancel()
+        hoverTask = nil
+        if referencesPopover == nil {
+            cancelReferencesPopover()
+        } else {
+            scheduleReferencesPopoverClose()
+        }
     }
 
     func configure(
@@ -468,6 +517,11 @@ private final class HistoryCollectionItem: NSCollectionViewItem {
         showsRepositoryName: Bool,
         visibility: HistoryColumnVisibility
     ) {
+        if displayedCommit != row.commit {
+            cancelReferencesPopover()
+            displayedCommit = row.commit
+        }
+
         let rootView = AnyView(
             VirtualizedHistoryRow(
                 row: row,
@@ -496,6 +550,51 @@ private final class HistoryCollectionItem: NSCollectionViewItem {
             hostingView.bottomAnchor.constraint(equalTo: view.bottomAnchor)
         ])
         self.hostingView = hostingView
+    }
+
+    private func showReferencesPopover(for commit: GitCommit) {
+        guard referencesPopover == nil, view.window != nil else { return }
+
+        let popover = NSPopover()
+        popover.behavior = .transient
+        popover.animates = !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        let groupCount = GitReference.Kind.allCases.filter { kind in
+            commit.references.contains { $0.kind == kind }
+        }.count
+        popover.contentSize = NSSize(
+            width: 360,
+            height: min(360, 68 + commit.references.count * 22 + groupCount * 18)
+        )
+        popover.contentViewController = NSHostingController(
+            rootView: CommitReferencesPopover(commit: commit) { [weak self] isHovering in
+                if isHovering {
+                    self?.popoverCloseTask?.cancel()
+                    self?.popoverCloseTask = nil
+                } else {
+                    self?.scheduleReferencesPopoverClose()
+                }
+            }
+        )
+        popover.show(relativeTo: view.bounds, of: view, preferredEdge: .maxY)
+        referencesPopover = popover
+    }
+
+    private func cancelReferencesPopover() {
+        hoverTask?.cancel()
+        hoverTask = nil
+        popoverCloseTask?.cancel()
+        popoverCloseTask = nil
+        referencesPopover?.close()
+        referencesPopover = nil
+    }
+
+    private func scheduleReferencesPopoverClose() {
+        popoverCloseTask?.cancel()
+        popoverCloseTask = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(200))
+            guard !Task.isCancelled else { return }
+            self?.cancelReferencesPopover()
+        }
     }
 }
 
@@ -724,6 +823,56 @@ private struct ReferenceBadge: View {
                 ? Color.primary
                 : reference.kind == .remote ? Color.purple : Color.green
         )
+    }
+}
+
+private struct CommitReferencesPopover: View {
+    let commit: GitCommit
+    let onHoverChange: (Bool) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 9) {
+            Text("브랜치 및 태그")
+                .font(.system(size: 12, weight: .semibold))
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 9) {
+                    ForEach(GitReference.Kind.allCases, id: \.rawValue) { kind in
+                        let references = commit.references.filter { $0.kind == kind }
+                        if !references.isEmpty {
+                            HStack(alignment: .top, spacing: 7) {
+                                Image(systemName: kind == .tag ? "tag" : "point.3.connected.trianglepath.dotted")
+                                    .foregroundStyle(kind == .remote ? Color.purple : Color.green)
+                                    .frame(width: 14)
+                                VStack(alignment: .leading, spacing: 3) {
+                                    Text(referenceKindTitle(kind))
+                                        .font(.system(size: 9, weight: .medium))
+                                        .foregroundStyle(.secondary)
+                                    ForEach(references) { reference in
+                                        Text(reference.shortName)
+                                            .font(.system(size: 11))
+                                            .textSelection(.enabled)
+                                            .fixedSize(horizontal: false, vertical: true)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+        .padding(12)
+        .frame(width: 360, alignment: .leading)
+        .onHover(perform: onHoverChange)
+    }
+
+    private func referenceKindTitle(_ kind: GitReference.Kind) -> String {
+        switch kind {
+        case .local: return "로컬 브랜치"
+        case .remote: return "원격 브랜치"
+        case .tag: return "태그"
+        }
     }
 }
 

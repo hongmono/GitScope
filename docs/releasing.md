@@ -5,7 +5,7 @@ GitScope는 `release` 브랜치를 배포 기준으로 사용합니다.
 - `release` 대상 pull request: Apple Silicon용 unsigned Release 빌드를 검증합니다.
 - `release` 브랜치 push 또는 해당 브랜치에서의 수동 실행: Developer ID로 서명하고 Apple 공증을 거쳐 GitHub Release를 생성합니다.
 - 버전 형식: `v0.1.<GitHub Actions run number>`
-- 산출물: `GitScope-<version>-macOS-arm64.zip`과 SHA-256 체크섬
+- 산출물: `GitScope-<version>-macOS-arm64.zip`, SHA-256 체크섬, 서명된 `appcast.xml`
 
 pull request에서는 fork를 포함한 변경 코드에 Apple 인증 정보가 전달되지 않습니다. 서명과 공증은 `release` 브랜치에 반영된 코드에만 수행됩니다.
 
@@ -21,6 +21,7 @@ pull request에서는 fork를 포함한 변경 코드에 Apple 인증 정보가 
 | `APPLE_API_KEY_ID` | App Store Connect API key ID |
 | `APPLE_API_ISSUER_ID` | App Store Connect issuer ID |
 | `APPLE_API_PRIVATE_KEY` | `AuthKey_<KEY_ID>.p8` 파일 전체 내용 |
+| `SPARKLE_ED_PRIVATE_KEY` | Sparkle `generate_keys`로 생성하고 `-x`로 내보낸 EdDSA private key |
 
 Keychain Access에서 Developer ID Application 인증서와 private key를 함께 `.p12`로 내보낸 뒤 다음 명령으로 Base64 값을 복사할 수 있습니다.
 
@@ -35,6 +36,8 @@ security find-identity -v -p codesigning
 ```
 
 App Store Connect의 **Users and Access → Integrations → Team Keys**에서 공증용 API key를 만들고 key ID, issuer ID, 내려받은 `.p8` 파일을 등록합니다. `.p8` 파일은 한 번만 내려받을 수 있으므로 별도로 안전하게 보관해야 합니다.
+
+Sparkle private key는 업데이트 ZIP과 appcast를 서명할 때만 사용합니다. 앱에는 대응하는 공개키만 포함되며, private key는 `release` Environment secret 밖으로 노출하지 않습니다.
 
 ## 배포 활성화
 

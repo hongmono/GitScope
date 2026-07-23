@@ -19,6 +19,7 @@
 		74676F8D43D9467A6C1182F8 /* RepositoryScanner.swift in Sources */ = {isa = PBXBuildFile; fileRef = A9CFCD3D87CC21ADD2AE41CD /* RepositoryScanner.swift */; };
 		80D35D89D0EF0FC3CAFD417B /* GitRepositoryLoader.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7BEFE28658B6A189A7536C6B /* GitRepositoryLoader.swift */; };
 		AAEF583B78C2939544BE9AC4 /* GitScopeApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = EA58D5EBA85D662E097AB1C6 /* GitScopeApp.swift */; };
+		ADAE94454A41F7C4160599B8 /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = 96C4C1B5A01B726096364581 /* Sparkle */; };
 		EA299277B3D9C9BBA45BF058 /* GitModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = ED42056A8FAFA02AA5C07D8E /* GitModels.swift */; };
 /* End PBXBuildFile section */
 
@@ -29,6 +30,7 @@
 		68DB1724FBCA7D6EA51036BF /* AppModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppModel.swift; sourceTree = "<group>"; };
 		73E807FFEF0A67BF5E426CEF /* CommitGraphLayout.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CommitGraphLayout.swift; sourceTree = "<group>"; };
 		7BEFE28658B6A189A7536C6B /* GitRepositoryLoader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GitRepositoryLoader.swift; sourceTree = "<group>"; };
+		9905B1D4230AB27EBA2CBC0E /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		A9CFCD3D87CC21ADD2AE41CD /* RepositoryScanner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RepositoryScanner.swift; sourceTree = "<group>"; };
 		B37DC3424E9099C222B5032B /* GitScope.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = GitScope.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		B6B85E1F79EFE4528AFC4136 /* CommitGraphView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CommitGraphView.swift; sourceTree = "<group>"; };
@@ -38,6 +40,17 @@
 		EA58D5EBA85D662E097AB1C6 /* GitScopeApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GitScopeApp.swift; sourceTree = "<group>"; };
 		ED42056A8FAFA02AA5C07D8E /* GitModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GitModels.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		0B15C4627611C95692691ABE /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				ADAE94454A41F7C4160599B8 /* Sparkle in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
 		083418B0C76753F373E3F4EF /* App */ = {
@@ -60,6 +73,7 @@
 		3EFEBA9ADB96F725F8C19793 /* GitScopeApp */ = {
 			isa = PBXGroup;
 			children = (
+				9905B1D4230AB27EBA2CBC0E /* Info.plist */,
 				083418B0C76753F373E3F4EF /* App */,
 				DAEA215EE5B4CB5042E8083F /* Models */,
 				78EE2A24A0F9176E85C97044 /* Services */,
@@ -116,6 +130,7 @@
 			buildConfigurationList = B474A8897DA3EEE8FE15BFDA /* Build configuration list for PBXNativeTarget "GitScope" */;
 			buildPhases = (
 				329A1493BB4FE451FBFCA11C /* Sources */,
+				0B15C4627611C95692691ABE /* Frameworks */,
 			);
 			buildRules = (
 			);
@@ -123,6 +138,7 @@
 			);
 			name = GitScope;
 			packageProductDependencies = (
+				96C4C1B5A01B726096364581 /* Sparkle */,
 			);
 			productName = GitScope;
 			productReference = B37DC3424E9099C222B5032B /* GitScope.app */;
@@ -151,6 +167,9 @@
 			);
 			mainGroup = B84D093F0018B6C2A337F8FC;
 			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				2E2816D6892A8F8EED278427 /* XCRemoteSwiftPackageReference "Sparkle" */,
+			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 353F34CD478830EB5CF87B0F /* Products */;
 			projectDirPath = "";
@@ -191,15 +210,15 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_HARDENED_RUNTIME = YES;
-				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_KEY_CFBundleDisplayName = GitScope;
-				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.developer-tools";
+				INFOPLIST_FILE = GitScopeApp/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
+				MARKETING_VERSION = 0.1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = dev.hongmono.gitscope;
 				PRODUCT_NAME = GitScope;
 				SDKROOT = macosx;
@@ -213,15 +232,15 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_HARDENED_RUNTIME = YES;
-				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_KEY_CFBundleDisplayName = GitScope;
-				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.developer-tools";
+				INFOPLIST_FILE = GitScopeApp/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
+				MARKETING_VERSION = 0.1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = dev.hongmono.gitscope;
 				PRODUCT_NAME = GitScope;
 				SDKROOT = macosx;
@@ -372,6 +391,25 @@
 			defaultConfigurationName = Debug;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		2E2816D6892A8F8EED278427 /* XCRemoteSwiftPackageReference "Sparkle" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/sparkle-project/Sparkle";
+			requirement = {
+				kind = exactVersion;
+				version = 2.9.4;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		96C4C1B5A01B726096364581 /* Sparkle */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 2E2816D6892A8F8EED278427 /* XCRemoteSwiftPackageReference "Sparkle" */;
+			productName = Sparkle;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = 2F0BB8C6ED6D69C195006A2E /* Project object */;
 }
