@@ -53,6 +53,7 @@ struct GitScopeApp: App {
                     model.openWorkspace()
                 }
                 .keyboardShortcut("o", modifiers: .command)
+                .disabled(model.remoteOperation != nil)
             }
 
             CommandMenu("Git") {

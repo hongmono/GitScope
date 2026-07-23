@@ -2,7 +2,7 @@ import Foundation
 
 struct RepositoryScanner: Sendable {
     private let ignoredDirectoryNames: Set<String> = [
-        ".git", ".build", ".gradle", ".idea", ".turbo", ".venv", ".worktrees",
+        ".git", ".build", ".gradle", ".idea", ".turbo", ".venv", ".worktree", ".worktrees",
         "DerivedData", "Pods", "build", "dist", "node_modules", "vendor"
     ]
 

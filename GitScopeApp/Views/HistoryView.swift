@@ -2,9 +2,10 @@ import SwiftUI
 
 struct HistoryView: View {
     @ObservedObject var model: AppModel
+    @State private var visibleGraphLaneCount = 1
 
     private var graphLaneCount: Int {
-        model.rows.lazy.map(\.graph.laneCount).max() ?? 1
+        max(1, visibleGraphLaneCount)
     }
 
     private var graphColumnWidth: CGFloat {
@@ -44,6 +45,8 @@ struct HistoryView: View {
                     model.selectCommit(commit)
                 } onClearSelection: {
                     model.clearSelection()
+                } onVisibleGraphLaneCountChange: { laneCount in
+                    visibleGraphLaneCount = laneCount
                 }
             }
         }

@@ -17,6 +17,7 @@ final class AppModel: ObservableObject {
     @Published private(set) var isLoadingReference = false
     @Published private(set) var isLoadingDetails = false
     @Published private(set) var isLoadingPatch = false
+    @Published private(set) var remoteOperation: GitRemoteOperation?
     @Published var errorMessage: String?
 
     @Published var query = "" {
@@ -38,6 +39,7 @@ final class AppModel: ObservableObject {
     @Published private(set) var isCurrentBranchesSelected = false
 
     private let loader = GitRepositoryLoader()
+    private let remoteService = GitRemoteService()
     private var allCommits: [GitCommit] = []
     private var branchMembership: Set<CommitID>?
     private var workspaceTask: Task<Void, Never>?
@@ -45,10 +47,11 @@ final class AppModel: ObservableObject {
     private var detailsTask: Task<Void, Never>?
     private var patchTask: Task<Void, Never>?
     private var queryTask: Task<Void, Never>?
+    private var remoteTask: Task<Void, Never>?
     private var hasRestoredWorkspace = false
 
     var availableAuthors: [String] {
-        Array(Set(allCommits.map(\.authorName))).sorted()
+        Array(Set(allCommits.filter { !$0.isWorkingTree }.map(\.authorName))).sorted()
     }
 
     var mergedReferenceGroups: [MergedReferenceGroup] {
@@ -80,7 +83,26 @@ final class AppModel: ObservableObject {
     }
 
     var isLoading: Bool {
-        isLoadingWorkspace || isLoadingReference
+        isLoadingWorkspace || isLoadingReference || remoteOperation != nil
+    }
+
+    func pullRebase(_ references: [GitReference]) {
+        let targets = references.filter {
+            $0.kind == .local
+                && $0.isCurrent
+                && $0.tracking != nil
+                && $0.tracking?.isGone != true
+        }
+        runRemoteOperation(.pull, references: targets)
+    }
+
+    func push(_ references: [GitReference]) {
+        let targets = references.filter {
+            $0.kind == .local
+                && $0.tracking != nil
+                && $0.tracking?.isGone != true
+        }
+        runRemoteOperation(.push, references: targets)
     }
 
     func restoreWorkspaceIfNeeded() {
@@ -98,6 +120,7 @@ final class AppModel: ObservableObject {
     }
 
     func openWorkspace() {
+        guard remoteOperation == nil else { return }
         let panel = NSOpenPanel()
         panel.title = "Git 저장소 또는 워크스페이스 선택"
         panel.prompt = "열기"
@@ -157,6 +180,9 @@ final class AppModel: ObservableObject {
                             repository: repository,
                             revision: currentReference?.fullName ?? "HEAD"
                         )
+                    )
+                    membership.insert(
+                        CommitID(repositoryID: repository.id, oid: "WORKTREE")
                     )
                 }
                 guard !Task.isCancelled, isCurrentBranchesSelected else { return }
@@ -219,6 +245,11 @@ final class AppModel: ObservableObject {
                                 reference: reference
                             )
                         )
+                        if reference.isCurrent {
+                            membership.insert(
+                                CommitID(repositoryID: repository.id, oid: "WORKTREE")
+                            )
+                        }
                         successfulLoadCount += 1
                     } catch {
                         lastError = error
@@ -346,11 +377,66 @@ final class AppModel: ObservableObject {
         return value.isEmpty ? nil : value
     }
 
+    private func runRemoteOperation(
+        _ kind: GitRemoteOperationKind,
+        references: [GitReference]
+    ) {
+        guard remoteOperation == nil else { return }
+        let targets = references.compactMap { reference -> (GitRepository, GitReference)? in
+            guard let repository = repositories.first(where: {
+                $0.id == reference.repositoryID
+            }) else {
+                return nil
+            }
+            return (repository, reference)
+        }
+        guard let firstTarget = targets.first else { return }
+
+        let operation = GitRemoteOperation(
+            repositoryID: firstTarget.0.id,
+            referenceID: targets.map { $0.1.id }.sorted().joined(separator: "::"),
+            kind: kind
+        )
+        remoteOperation = operation
+        errorMessage = nil
+        remoteTask = Task {
+            var failures: [String] = []
+            for (repository, reference) in targets {
+                do {
+                    switch kind {
+                    case .pull:
+                        try await remoteService.pullRebase(
+                            repository: repository,
+                            reference: reference
+                        )
+                    case .push:
+                        try await remoteService.push(
+                            repository: repository,
+                            reference: reference
+                        )
+                    }
+                } catch {
+                    failures.append(
+                        "\(repository.name) · \(reference.shortName): \(error.localizedDescription)"
+                    )
+                }
+            }
+            guard remoteOperation == operation else { return }
+            remoteOperation = nil
+            remoteTask = nil
+            refresh()
+            if !failures.isEmpty {
+                errorMessage = failures.joined(separator: "\n\n")
+            }
+        }
+    }
+
     private func loadWorkspaces(
         _ urls: [URL],
         pathFilter: String? = nil,
         preserveRepositoryVisibility: Bool = false
     ) {
+        guard remoteOperation == nil else { return }
         let uniqueURLs = uniqueWorkspaceURLs(urls)
         guard !uniqueURLs.isEmpty else { return }
         let previousRepositoryIDs = Set(repositories.map(\.id))

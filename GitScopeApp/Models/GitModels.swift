@@ -33,8 +33,30 @@ struct GitReference: Identifiable, Hashable, Sendable {
     let targetOID: String
     let kind: Kind
     let isCurrent: Bool
+    let tracking: GitBranchTracking?
 
     var id: String { "\(repositoryID.rawValue)::\(fullName)" }
+}
+
+struct GitBranchTracking: Hashable, Sendable {
+    let upstreamFullName: String
+    let upstreamShortName: String
+    let remoteName: String
+    let remoteRef: String
+    let aheadCount: Int
+    let behindCount: Int
+    let isGone: Bool
+}
+
+enum GitRemoteOperationKind: String, Sendable {
+    case pull
+    case push
+}
+
+struct GitRemoteOperation: Equatable, Sendable {
+    let repositoryID: RepositoryID
+    let referenceID: String
+    let kind: GitRemoteOperationKind
 }
 
 struct MergedReferenceGroup: Identifiable, Hashable, Sendable {
@@ -56,6 +78,8 @@ struct GitCommit: Identifiable, Hashable, Sendable {
     let authorDate: Date
     let committerDate: Date
     let references: [GitReference]
+    let isHead: Bool
+    let isWorkingTree: Bool
 
     var shortOID: String { String(id.oid.prefix(8)) }
 }

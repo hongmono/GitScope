@@ -31,6 +31,7 @@ struct VirtualizedHistoryList: View {
     let repositoryColorIndices: [RepositoryID: Int]
     let onSelect: (GitCommit) -> Void
     let onClearSelection: () -> Void
+    let onVisibleGraphLaneCountChange: (Int) -> Void
 
     var body: some View {
         GeometryReader { proxy in
@@ -54,7 +55,8 @@ struct VirtualizedHistoryList: View {
                     repositoryColorIndices: repositoryColorIndices,
                     visibility: visibility,
                     onSelect: onSelect,
-                    onClearSelection: onClearSelection
+                    onClearSelection: onClearSelection,
+                    onVisibleGraphLaneCountChange: onVisibleGraphLaneCountChange
                 )
             }
         }
@@ -76,14 +78,7 @@ private struct HistoryColumnVisibility: Equatable {
     let showsDate: Bool
 
     init(availableWidth: CGFloat, graphColumnWidth: CGFloat, graphLaneCount: Int) {
-        let maximumGraphWidth = max(
-            56,
-            availableWidth
-                - HistoryColumnMetrics.repositoryWidth
-                - HistoryColumnMetrics.minimumCommitWidth
-                - 2
-        )
-        self.graphColumnWidth = min(graphColumnWidth, maximumGraphWidth)
+        self.graphColumnWidth = graphColumnWidth
         laneSpacing = graphLaneCount > 1
             ? min(18, (self.graphColumnWidth - 40) / CGFloat(graphLaneCount - 1))
             : 18
@@ -153,6 +148,7 @@ private struct VirtualizedHistoryCollection: NSViewRepresentable {
     let visibility: HistoryColumnVisibility
     let onSelect: (GitCommit) -> Void
     let onClearSelection: () -> Void
+    let onVisibleGraphLaneCountChange: (Int) -> Void
 
     func makeCoordinator() -> Coordinator {
         Coordinator()
@@ -187,6 +183,13 @@ private struct VirtualizedHistoryCollection: NSViewRepresentable {
         collectionView.onWidthChange = { [weak coordinator = context.coordinator] in
             coordinator?.refreshVisibleRowsAfterResize()
         }
+        scrollView.contentView.postsBoundsChangedNotifications = true
+        NotificationCenter.default.addObserver(
+            context.coordinator,
+            selector: #selector(Coordinator.visibleBoundsDidChange(_:)),
+            name: NSView.boundsDidChangeNotification,
+            object: scrollView.contentView
+        )
 
         context.coordinator.collectionView = collectionView
         context.coordinator.apply(
@@ -197,7 +200,8 @@ private struct VirtualizedHistoryCollection: NSViewRepresentable {
             repositoryColorIndices: repositoryColorIndices,
             visibility: visibility,
             onSelect: onSelect,
-            onClearSelection: onClearSelection
+            onClearSelection: onClearSelection,
+            onVisibleGraphLaneCountChange: onVisibleGraphLaneCountChange
         )
         return scrollView
     }
@@ -211,7 +215,16 @@ private struct VirtualizedHistoryCollection: NSViewRepresentable {
             repositoryColorIndices: repositoryColorIndices,
             visibility: visibility,
             onSelect: onSelect,
-            onClearSelection: onClearSelection
+            onClearSelection: onClearSelection,
+            onVisibleGraphLaneCountChange: onVisibleGraphLaneCountChange
+        )
+    }
+
+    static func dismantleNSView(_ scrollView: NSScrollView, coordinator: Coordinator) {
+        NotificationCenter.default.removeObserver(
+            coordinator,
+            name: NSView.boundsDidChangeNotification,
+            object: scrollView.contentView
         )
     }
 
@@ -235,6 +248,8 @@ private struct VirtualizedHistoryCollection: NSViewRepresentable {
         )
         private var onSelect: ((GitCommit) -> Void)?
         private var onClearSelection: (() -> Void)?
+        private var onVisibleGraphLaneCountChange: ((Int) -> Void)?
+        private var visibleGraphLaneCount = 0
         private var pendingPrefetchCommits: [GitCommit] = []
         private var prefetchTask: Task<Void, Never>?
         private var isSynchronizingSelection = false
@@ -247,7 +262,8 @@ private struct VirtualizedHistoryCollection: NSViewRepresentable {
             repositoryColorIndices: [RepositoryID: Int],
             visibility: HistoryColumnVisibility,
             onSelect: @escaping (GitCommit) -> Void,
-            onClearSelection: @escaping () -> Void
+            onClearSelection: @escaping () -> Void,
+            onVisibleGraphLaneCountChange: @escaping (Int) -> Void
         ) {
             let newRowIDs = rows.map(\.id)
             let rowsChanged = rowIDs != newRowIDs
@@ -268,6 +284,7 @@ private struct VirtualizedHistoryCollection: NSViewRepresentable {
             self.visibility = visibility
             self.onSelect = onSelect
             self.onClearSelection = onClearSelection
+            self.onVisibleGraphLaneCountChange = onVisibleGraphLaneCountChange
 
             if rowsChanged {
                 pendingPrefetchCommits.removeAll()
@@ -277,6 +294,7 @@ private struct VirtualizedHistoryCollection: NSViewRepresentable {
                 updateVisibleItems()
             }
             synchronizeSelection()
+            updateVisibleGraphLaneCount()
         }
 
         func numberOfSections(in collectionView: NSCollectionView) -> Int {
@@ -386,7 +404,42 @@ private struct VirtualizedHistoryCollection: NSViewRepresentable {
             guard let collectionView else { return }
             collectionView.collectionViewLayout?.invalidateLayout()
             updateVisibleItems()
+            updateVisibleGraphLaneCount()
             collectionView.needsLayout = true
+        }
+
+        @objc func visibleBoundsDidChange(_ notification: Notification) {
+            updateVisibleGraphLaneCount()
+        }
+
+        private func updateVisibleGraphLaneCount() {
+            guard let scrollView = collectionView?.enclosingScrollView,
+                  !rows.isEmpty else {
+                reportVisibleGraphLaneCount(1)
+                return
+            }
+
+            let visibleRect = scrollView.contentView.bounds
+            let rowHeight = HistoryColumnMetrics.rowHeight
+            let firstIndex = min(
+                rows.count - 1,
+                max(0, Int(floor(visibleRect.minY / rowHeight)))
+            )
+            let lastIndex = min(
+                rows.count - 1,
+                max(firstIndex, Int(ceil(visibleRect.maxY / rowHeight)) - 1)
+            )
+            let laneCount = rows[firstIndex...lastIndex]
+                .lazy
+                .map(\.graph.laneCount)
+                .max() ?? 1
+            reportVisibleGraphLaneCount(laneCount)
+        }
+
+        private func reportVisibleGraphLaneCount(_ laneCount: Int) {
+            guard laneCount != visibleGraphLaneCount else { return }
+            visibleGraphLaneCount = laneCount
+            onVisibleGraphLaneCountChange?(laneCount)
         }
 
         private func configure(_ item: HistoryCollectionItem, at index: Int) {
@@ -425,11 +478,9 @@ private struct VirtualizedHistoryCollection: NSViewRepresentable {
 }
 
 @MainActor
-private final class HistoryCollectionItem: NSCollectionViewItem {
+private final class HistoryCollectionItem: NSCollectionViewItem, NSPopoverDelegate {
     private var hostingView: NSHostingView<AnyView>?
     private var displayedCommit: GitCommit?
-    private var hoverTask: Task<Void, Never>?
-    private var popoverCloseTask: Task<Void, Never>?
     private var referencesPopover: NSPopover?
     private let fadeDuration: TimeInterval = 0.10
     private let initialFadeAlpha: CGFloat = 0.55
@@ -437,14 +488,12 @@ private final class HistoryCollectionItem: NSCollectionViewItem {
     override func loadView() {
         view = NSView()
         view.wantsLayer = true
-        view.addTrackingArea(
-            NSTrackingArea(
-                rect: .zero,
-                options: [.mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect],
-                owner: self,
-                userInfo: nil
-            )
+        let rightClickRecognizer = NSClickGestureRecognizer(
+            target: self,
+            action: #selector(showReferencesForRightClick(_:))
         )
+        rightClickRecognizer.buttonMask = 0x2
+        view.addGestureRecognizer(rightClickRecognizer)
     }
 
     override func viewWillAppear() {
@@ -475,36 +524,6 @@ private final class HistoryCollectionItem: NSCollectionViewItem {
         super.prepareForReuse()
         displayedCommit = nil
         cancelReferencesPopover()
-    }
-
-    override func mouseEntered(with event: NSEvent) {
-        super.mouseEntered(with: event)
-        guard let commit = displayedCommit, !commit.references.isEmpty else { return }
-        popoverCloseTask?.cancel()
-        popoverCloseTask = nil
-        guard referencesPopover == nil else { return }
-
-        hoverTask?.cancel()
-        hoverTask = Task { [weak self] in
-            try? await Task.sleep(for: .seconds(1))
-            guard !Task.isCancelled,
-                  let self,
-                  self.displayedCommit?.id == commit.id else {
-                return
-            }
-            self.showReferencesPopover(for: commit)
-        }
-    }
-
-    override func mouseExited(with event: NSEvent) {
-        super.mouseExited(with: event)
-        hoverTask?.cancel()
-        hoverTask = nil
-        if referencesPopover == nil {
-            cancelReferencesPopover()
-        } else {
-            scheduleReferencesPopoverClose()
-        }
     }
 
     func configure(
@@ -553,48 +572,42 @@ private final class HistoryCollectionItem: NSCollectionViewItem {
     }
 
     private func showReferencesPopover(for commit: GitCommit) {
-        guard referencesPopover == nil, view.window != nil else { return }
+        guard view.window != nil else { return }
+        cancelReferencesPopover()
 
         let popover = NSPopover()
         popover.behavior = .transient
         popover.animates = !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        popover.delegate = self
         let groupCount = GitReference.Kind.allCases.filter { kind in
             commit.references.contains { $0.kind == kind }
         }.count
         popover.contentSize = NSSize(
             width: 360,
-            height: min(360, 68 + commit.references.count * 22 + groupCount * 18)
+            height: max(
+                132,
+                min(400, 112 + commit.references.count * 22 + groupCount * 18)
+            )
         )
         popover.contentViewController = NSHostingController(
-            rootView: CommitReferencesPopover(commit: commit) { [weak self] isHovering in
-                if isHovering {
-                    self?.popoverCloseTask?.cancel()
-                    self?.popoverCloseTask = nil
-                } else {
-                    self?.scheduleReferencesPopoverClose()
-                }
-            }
+            rootView: CommitReferencesPopover(commit: commit)
         )
         popover.show(relativeTo: view.bounds, of: view, preferredEdge: .maxY)
         referencesPopover = popover
     }
 
-    private func cancelReferencesPopover() {
-        hoverTask?.cancel()
-        hoverTask = nil
-        popoverCloseTask?.cancel()
-        popoverCloseTask = nil
-        referencesPopover?.close()
+    @objc private func showReferencesForRightClick(_ recognizer: NSClickGestureRecognizer) {
+        guard recognizer.state == .ended, let commit = displayedCommit else { return }
+        showReferencesPopover(for: commit)
+    }
+
+    func popoverDidClose(_ notification: Notification) {
         referencesPopover = nil
     }
 
-    private func scheduleReferencesPopoverClose() {
-        popoverCloseTask?.cancel()
-        popoverCloseTask = Task { [weak self] in
-            try? await Task.sleep(for: .milliseconds(200))
-            guard !Task.isCancelled else { return }
-            self?.cancelReferencesPopover()
-        }
+    private func cancelReferencesPopover() {
+        referencesPopover?.close()
+        referencesPopover = nil
     }
 }
 
@@ -675,6 +688,7 @@ private struct VirtualizedHistoryRow: View {
     let repositoryColorIndex: Int
     let showsRepositoryName: Bool
     let visibility: HistoryColumnVisibility
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         HStack(spacing: 0) {
@@ -726,6 +740,10 @@ private struct VirtualizedHistoryRow: View {
         .frame(maxWidth: .infinity, minHeight: HistoryColumnMetrics.rowHeight, alignment: .leading)
         .background(rowBackground)
         .contentShape(Rectangle())
+        .animation(
+            reduceMotion ? nil : .easeOut(duration: 0.12),
+            value: isSelected
+        )
     }
 
     private var rowBackground: Color {
@@ -783,6 +801,24 @@ private struct CommitMessageHistoryCell: View {
                 .lineLimit(1)
                 .layoutPriority(1)
 
+            if commit.isWorkingTree {
+                CommitLocationBadge(
+                    title: "작업 중",
+                    systemImage: "hammer.fill",
+                    color: .orange,
+                    isSelected: isSelected
+                )
+            }
+
+            if commit.isHead {
+                CommitLocationBadge(
+                    title: "HEAD",
+                    systemImage: "location.fill",
+                    color: .accentColor,
+                    isSelected: isSelected
+                )
+            }
+
             ForEach(commit.references.prefix(3)) { reference in
                 ReferenceBadge(reference: reference, isSelected: isSelected)
             }
@@ -794,16 +830,32 @@ private struct CommitMessageHistoryCell: View {
         }
         .font(.system(size: 11))
         .frame(maxWidth: .infinity, alignment: .leading)
-        .contextMenu {
-            Button("커밋 해시 복사") {
-                NSPasteboard.general.clearContents()
-                NSPasteboard.general.setString(commit.id.oid, forType: .string)
-            }
-            Button("커밋 메시지 복사") {
-                NSPasteboard.general.clearContents()
-                NSPasteboard.general.setString(commit.subject, forType: .string)
-            }
+    }
+}
+
+private struct CommitLocationBadge: View {
+    let title: String
+    let systemImage: String
+    let color: Color
+    let isSelected: Bool
+
+    var body: some View {
+        HStack(spacing: 3) {
+            Image(systemName: systemImage)
+            Text(title)
         }
+        .font(.system(size: 9, weight: .semibold))
+        .foregroundStyle(isSelected ? Color.primary : color)
+        .padding(.horizontal, 5)
+        .padding(.vertical, 2)
+        .background(
+            Capsule()
+                .fill(color.opacity(isSelected ? 0.22 : 0.12))
+        )
+        .overlay(
+            Capsule()
+                .stroke(color.opacity(0.45), lineWidth: 0.5)
+        )
     }
 }
 
@@ -828,7 +880,6 @@ private struct ReferenceBadge: View {
 
 private struct CommitReferencesPopover: View {
     let commit: GitCommit
-    let onHoverChange: (Bool) -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 9) {
@@ -858,13 +909,34 @@ private struct CommitReferencesPopover: View {
                             }
                         }
                     }
+
+                    if commit.references.isEmpty {
+                        Text("연결된 브랜치 또는 태그가 없습니다.")
+                            .font(.system(size: 11))
+                            .foregroundStyle(.secondary)
+                    }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
+
+            Divider()
+
+            HStack(spacing: 12) {
+                if !commit.isWorkingTree {
+                    Button("커밋 해시 복사") {
+                        copyToPasteboard(commit.id.oid)
+                    }
+                }
+                Button("커밋 메시지 복사") {
+                    copyToPasteboard(commit.subject)
+                }
+                Spacer(minLength: 0)
+            }
+            .buttonStyle(.borderless)
+            .font(.system(size: 11))
         }
         .padding(12)
         .frame(width: 360, alignment: .leading)
-        .onHover(perform: onHoverChange)
     }
 
     private func referenceKindTitle(_ kind: GitReference.Kind) -> String {
@@ -873,6 +945,11 @@ private struct CommitReferencesPopover: View {
         case .remote: return "원격 브랜치"
         case .tag: return "태그"
         }
+    }
+
+    private func copyToPasteboard(_ value: String) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(value, forType: .string)
     }
 }
 

@@ -39,6 +39,16 @@ struct CommitGraphView: View {
 
     private var commitNode: some View {
         ZStack {
+            if commit.isHead {
+                Circle()
+                    .fill(Color.accentColor.opacity(0.16))
+                    .frame(width: nodeDiameter + 10, height: nodeDiameter + 10)
+
+                Circle()
+                    .stroke(Color.accentColor, lineWidth: 1.75)
+                    .frame(width: nodeDiameter + 7, height: nodeDiameter + 7)
+            }
+
             if isSelected {
                 Circle()
                     .fill(color(for: layout.nodeLane).opacity(0.24))
@@ -67,11 +77,22 @@ struct CommitGraphView: View {
 
     @ViewBuilder
     private var avatarContent: some View {
-        AuthorAvatarView(
-            commit: commit,
-            size: max(0, nodeDiameter - 4),
-            fallbackColor: authorColor
-        )
+        if commit.isWorkingTree {
+            Circle()
+                .fill(Color.orange)
+                .frame(width: nodeDiameter - 3, height: nodeDiameter - 3)
+                .overlay {
+                    Image(systemName: "hammer.fill")
+                        .font(.system(size: max(5, nodeDiameter * 0.42), weight: .bold))
+                        .foregroundStyle(.white)
+                }
+        } else {
+            AuthorAvatarView(
+                commit: commit,
+                size: max(0, nodeDiameter - 4),
+                fallbackColor: authorColor
+            )
+        }
     }
 
     private func drawGraph(in context: GraphicsContext, size: CGSize) {
@@ -188,6 +209,12 @@ struct CommitGraphView: View {
     }
 
     private var accessibilityValue: String {
+        if commit.isWorkingTree {
+            return "커밋되지 않은 작업 트리 변경 사항, \(layout.nodeLane + 1)번 레인"
+        }
+        if commit.isHead {
+            return "현재 HEAD 커밋, \(layout.nodeLane + 1)번 레인"
+        }
         if layout.isBranchPoint {
             return "브랜치 \(layout.incomingLanes.count)개가 갈라진 기준 커밋, \(layout.nodeLane + 1)번 레인"
         }

@@ -3,6 +3,7 @@ import SwiftUI
 
 struct CommitDetailsView: View {
     @ObservedObject var model: AppModel
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         VSplitView {
@@ -10,6 +11,14 @@ struct CommitDetailsView: View {
             diffPane
         }
         .background(Color(nsColor: .textBackgroundColor))
+        .animation(
+            reduceMotion ? nil : .easeOut(duration: 0.14),
+            value: model.selectedCommit?.id
+        )
+        .animation(
+            reduceMotion ? nil : .easeOut(duration: 0.12),
+            value: model.isLoadingDetails
+        )
     }
 
     private var changedFilesPane: some View {
@@ -146,39 +155,62 @@ private struct CommitInformationView: View {
 
                 Divider()
 
-                CommitMetadataRow(
-                    title: "작성자",
-                    value: "\(commit.authorName) <\(commit.authorEmail)>",
-                    systemImage: "person.crop.circle"
-                )
-                CommitMetadataRow(
-                    title: "작성 시각",
-                    value: commit.authorDate.formatted(
-                        .dateTime.year().month().day().hour().minute().second()
-                    ),
-                    systemImage: "clock"
-                )
-                CommitMetadataRow(
-                    title: "커밋 해시",
-                    value: commit.id.oid,
-                    systemImage: "number",
-                    monospaced: true
-                )
-                if !referenceDetails.isEmpty {
+                if commit.isWorkingTree {
                     CommitMetadataRow(
-                        title: "브랜치 및 태그",
-                        value: referenceDetails,
-                        systemImage: "point.3.connected.trianglepath.dotted"
+                        title: "상태",
+                        value: "커밋 전 작업 트리",
+                        systemImage: "hammer.fill"
+                    )
+                    if let baseOID = commit.parentOIDs.first {
+                        CommitMetadataRow(
+                            title: "기준 커밋",
+                            value: baseOID,
+                            systemImage: "arrow.down.to.line",
+                            monospaced: true
+                        )
+                    }
+                } else {
+                    if commit.isHead {
+                        CommitMetadataRow(
+                            title: "현재 위치",
+                            value: "HEAD",
+                            systemImage: "location.fill"
+                        )
+                    }
+                    CommitMetadataRow(
+                        title: "작성자",
+                        value: "\(commit.authorName) <\(commit.authorEmail)>",
+                        systemImage: "person.crop.circle"
+                    )
+                    CommitMetadataRow(
+                        title: "작성 시각",
+                        value: commit.authorDate.formatted(
+                            .dateTime.year().month().day().hour().minute().second()
+                        ),
+                        systemImage: "clock"
+                    )
+                    CommitMetadataRow(
+                        title: "커밋 해시",
+                        value: commit.id.oid,
+                        systemImage: "number",
+                        monospaced: true
+                    )
+                    if !referenceDetails.isEmpty {
+                        CommitMetadataRow(
+                            title: "브랜치 및 태그",
+                            value: referenceDetails,
+                            systemImage: "point.3.connected.trianglepath.dotted"
+                        )
+                    }
+                    CommitMetadataRow(
+                        title: "부모",
+                        value: commit.parentOIDs.isEmpty
+                            ? "없음"
+                            : commit.parentOIDs.joined(separator: "\n"),
+                        systemImage: "arrow.triangle.branch",
+                        monospaced: true
                     )
                 }
-                CommitMetadataRow(
-                    title: "부모",
-                    value: commit.parentOIDs.isEmpty
-                        ? "없음"
-                        : commit.parentOIDs.joined(separator: "\n"),
-                    systemImage: "arrow.triangle.branch",
-                    monospaced: true
-                )
             }
             .padding(12)
             .frame(maxWidth: .infinity, alignment: .topLeading)
@@ -244,19 +276,29 @@ private struct CommitSummary: View {
             Text(commit.subject)
                 .font(.system(size: 12, weight: .semibold))
                 .textSelection(.enabled)
-            HStack(spacing: 6) {
-                Image(systemName: "person.crop.circle")
-                Text("\(commit.authorName) <\(commit.authorEmail)>")
-                Spacer()
+            if commit.isWorkingTree {
+                HStack(spacing: 6) {
+                    Image(systemName: "hammer.fill")
+                        .foregroundStyle(.orange)
+                    Text("현재 작업 트리")
+                    Spacer()
+                }
+                .foregroundStyle(.secondary)
+            } else {
+                HStack(spacing: 6) {
+                    Image(systemName: "person.crop.circle")
+                    Text("\(commit.authorName) <\(commit.authorEmail)>")
+                    Spacer()
+                }
+                .foregroundStyle(.secondary)
+                HStack(spacing: 6) {
+                    Image(systemName: commit.isHead ? "location.fill" : "number")
+                    Text(commit.isHead ? "HEAD · \(commit.id.oid)" : commit.id.oid)
+                        .font(.system(size: 10, design: .monospaced))
+                        .textSelection(.enabled)
+                }
+                .foregroundStyle(commit.isHead ? Color.accentColor : .secondary)
             }
-            .foregroundStyle(.secondary)
-            HStack(spacing: 6) {
-                Image(systemName: "number")
-                Text(commit.id.oid)
-                    .font(.system(size: 10, design: .monospaced))
-                    .textSelection(.enabled)
-            }
-            .foregroundStyle(.secondary)
         }
         .font(.system(size: 10))
         .padding(10)

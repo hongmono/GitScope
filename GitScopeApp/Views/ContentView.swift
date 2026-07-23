@@ -2,17 +2,38 @@ import SwiftUI
 
 struct ContentView: View {
     @ObservedObject var model: AppModel
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    private var stateAnimation: Animation? {
+        reduceMotion
+            ? .linear(duration: 0.10)
+            : .timingCurve(0.23, 1, 0.32, 1, duration: 0.18)
+    }
 
     var body: some View {
         VStack(spacing: 0) {
             ToolWindowTabs(model: model)
             Divider()
 
-            if model.workspaceURLs.isEmpty && !model.isLoading {
-                WelcomeView(model: model)
-            } else {
-                workspaceContent
+            ZStack {
+                if model.workspaceURLs.isEmpty && model.isLoadingWorkspace {
+                    InitialWorkspaceLoadingView()
+                        .transition(.opacity)
+                } else if model.workspaceURLs.isEmpty {
+                    WelcomeView(model: model)
+                        .transition(.opacity)
+                } else {
+                    workspaceContent
+                        .transition(.opacity)
+
+                    if model.isLoadingWorkspace {
+                        WorkspaceLoadingOverlay()
+                            .transition(.opacity)
+                    }
+                }
             }
+            .animation(stateAnimation, value: model.isLoadingWorkspace)
+            .animation(stateAnimation, value: model.workspaceURLs)
         }
         .background(Color(nsColor: .windowBackgroundColor))
         .onAppear {
@@ -47,6 +68,63 @@ struct ContentView: View {
     }
 }
 
+private struct InitialWorkspaceLoadingView: View {
+    var body: some View {
+        VStack(spacing: 15) {
+            ZStack {
+                Circle()
+                    .fill(Color.accentColor.opacity(0.10))
+                    .frame(width: 58, height: 58)
+                Image(systemName: "point.3.connected.trianglepath.dotted")
+                    .font(.system(size: 28, weight: .light))
+                    .foregroundStyle(Color.accentColor)
+            }
+
+            VStack(spacing: 5) {
+                Text("Git 로그를 불러오는 중")
+                    .font(.system(size: 16, weight: .semibold))
+                Text("저장소와 브랜치를 확인하고 커밋 그래프를 구성하고 있습니다.")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary)
+            }
+
+            ProgressView()
+                .controlSize(.small)
+        }
+        .padding(28)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Git 로그를 불러오는 중")
+    }
+}
+
+private struct WorkspaceLoadingOverlay: View {
+    var body: some View {
+        ZStack {
+            Color(nsColor: .windowBackgroundColor)
+                .opacity(0.36)
+
+            HStack(spacing: 10) {
+                ProgressView()
+                    .controlSize(.small)
+                Text("Git 로그 업데이트 중…")
+                    .font(.system(size: 12, weight: .medium))
+            }
+            .padding(.horizontal, 16)
+            .frame(height: 42)
+            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10))
+            .overlay(
+                RoundedRectangle(cornerRadius: 10)
+                    .stroke(Color(nsColor: .separatorColor).opacity(0.55), lineWidth: 0.5)
+            )
+            .shadow(color: .black.opacity(0.12), radius: 12, y: 5)
+        }
+        .allowsHitTesting(true)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Git 로그 업데이트 중")
+    }
+}
+
 private struct ToolWindowTabs: View {
     @ObservedObject var model: AppModel
 
@@ -66,6 +144,7 @@ private struct ToolWindowTabs: View {
                 Image(systemName: "plus")
             }
             .buttonStyle(.plain)
+            .disabled(model.remoteOperation != nil)
             .help("워크스페이스 열기 (⌘O)")
 
             Spacer()

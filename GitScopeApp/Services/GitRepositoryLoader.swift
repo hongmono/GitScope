@@ -29,7 +29,7 @@ actor GitRepositoryLoader {
         let repositoryURLs = Array(
             Set(
                 rootURLs.flatMap { scanner.scan(rootURL: $0) }
-                    .map(\.standardizedFileURL)
+                    .map { $0.standardizedFileURL.resolvingSymlinksInPath() }
             )
         ).sorted { $0.path.localizedStandardCompare($1.path) == .orderedAscending }
         guard !repositoryURLs.isEmpty else {
@@ -45,13 +45,24 @@ actor GitRepositoryLoader {
             )
             guard seenRepositoryIDs.insert(repository.id).inserted else { continue }
             let references = try await loadReferences(repository: repository)
-            let commits = try await loadCommits(
+            let headOID = try? await loadHeadOID(repository: repository)
+            var commits = try await loadCommits(
                 repository: repository,
                 references: references,
+                headOID: headOID,
                 revision: "--all",
                 commitLimit: commitLimit,
                 pathFilter: pathFilter
             )
+            if let workingTreeCommit = try await loadWorkingTreeCommit(
+                repository: repository,
+                headOID: headOID.flatMap { oid in
+                    commits.contains { $0.id.oid == oid } ? oid : nil
+                },
+                pathFilter: pathFilter
+            ) {
+                commits.insert(workingTreeCommit, at: 0)
+            }
             snapshots.append(
                 RepositorySnapshot(
                     repository: repository,
@@ -104,6 +115,13 @@ actor GitRepositoryLoader {
     }
 
     func loadDetails(commit: GitCommit, repository: GitRepository) async throws -> CommitDetails {
+        if commit.isWorkingTree {
+            return CommitDetails(
+                commit: commit,
+                files: try await loadWorkingTreeFiles(repository: repository, pathFilter: nil)
+            )
+        }
+
         let fileData = try await runner.runData(
             repositoryURL: repository.rootURL,
             arguments: [
@@ -124,7 +142,25 @@ actor GitRepositoryLoader {
         repository: GitRepository,
         file: ChangedFile
     ) async throws -> String {
-        try await runner.runText(
+        if commit.isWorkingTree {
+            if file.status == "??" {
+                return "추적되지 않은 파일입니다. Git에 추가한 뒤 전체 diff를 확인할 수 있습니다.\n\n\(file.path)"
+            }
+
+            return try await runner.runText(
+                repositoryURL: repository.rootURL,
+                arguments: [
+                    "-c", "color.ui=false",
+                    "--literal-pathspecs",
+                    "diff", "HEAD", "--patch",
+                    "--find-renames", "--find-copies", "--unified=3",
+                    "--no-ext-diff", "--no-textconv", "--"
+                ] + file.diffPaths,
+                maximumBytes: 8_000_000
+            )
+        }
+
+        return try await runner.runText(
             repositoryURL: repository.rootURL,
             arguments: [
                 "-c", "color.ui=false",
@@ -143,7 +179,9 @@ actor GitRepositoryLoader {
             arguments: ["rev-parse", "--show-toplevel"]
         ).trimmingCharacters(in: .whitespacesAndNewlines)
 
-        let normalizedURL = URL(fileURLWithPath: topLevel).standardizedFileURL
+        let normalizedURL = URL(fileURLWithPath: topLevel)
+            .standardizedFileURL
+            .resolvingSymlinksInPath()
         return GitRepository(
             id: RepositoryID(rawValue: normalizedURL.path),
             name: normalizedURL.lastPathComponent,
@@ -152,13 +190,75 @@ actor GitRepositoryLoader {
         )
     }
 
+    private func loadHeadOID(repository: GitRepository) async throws -> String {
+        try await runner.runText(
+            repositoryURL: repository.rootURL,
+            arguments: ["rev-parse", "--verify", "HEAD"]
+        ).trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private func loadWorkingTreeCommit(
+        repository: GitRepository,
+        headOID: String?,
+        pathFilter: String?
+    ) async throws -> GitCommit? {
+        let files = try await loadWorkingTreeFiles(
+            repository: repository,
+            pathFilter: pathFilter
+        )
+        guard !files.isEmpty else { return nil }
+
+        let authorName = (try? await runner.runText(
+            repositoryURL: repository.rootURL,
+            arguments: ["config", "--get", "user.name"]
+        ).trimmingCharacters(in: .whitespacesAndNewlines)) ?? "작업 트리"
+        let authorEmail = (try? await runner.runText(
+            repositoryURL: repository.rootURL,
+            arguments: ["config", "--get", "user.email"]
+        ).trimmingCharacters(in: .whitespacesAndNewlines)) ?? ""
+
+        return GitCommit(
+            id: CommitID(repositoryID: repository.id, oid: "WORKTREE"),
+            parentOIDs: headOID.map { [$0] } ?? [],
+            subject: "커밋되지 않은 변경 사항",
+            body: "현재 작업 트리에서 변경된 파일입니다.",
+            authorName: authorName.isEmpty ? "작업 트리" : authorName,
+            authorEmail: authorEmail,
+            authorDate: .now,
+            committerDate: .now,
+            references: [],
+            isHead: false,
+            isWorkingTree: true
+        )
+    }
+
+    private func loadWorkingTreeFiles(
+        repository: GitRepository,
+        pathFilter: String?
+    ) async throws -> [ChangedFile] {
+        var arguments = [
+            "-c", "color.ui=false",
+            "status", "--porcelain=v1", "-z", "--untracked-files=all"
+        ]
+        if let pathFilter, !pathFilter.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            arguments.append("--")
+            arguments.append(pathFilter)
+        }
+        let data = try await runner.runData(
+            repositoryURL: repository.rootURL,
+            arguments: arguments,
+            maximumBytes: 4_000_000
+        )
+        return parseWorkingTreeFiles(data)
+    }
+
     private func loadReferences(repository: GitRepository) async throws -> [GitReference] {
         let data = try await runner.runData(
             repositoryURL: repository.rootURL,
             arguments: [
                 "-c", "color.ui=false",
                 "for-each-ref",
-                "--format=%(refname)%00%(objectname)%00%(*objectname)%00%(HEAD)%00",
+                "--format=%(refname)%00%(objectname)%00%(*objectname)%00%(HEAD)%00%(upstream)%00%(upstream:short)%00%(upstream:remotename)%00%(upstream:remoteref)%00%(upstream:track,nobracket)%00",
                 "refs/heads", "refs/remotes", "refs/tags"
             ],
             maximumBytes: 3_000_000
@@ -167,7 +267,7 @@ actor GitRepositoryLoader {
         let fields = splitNullTerminated(data)
         var references: [GitReference] = []
         var index = 0
-        while index + 3 < fields.count {
+        while index + 8 < fields.count {
             let fullName = fields[index]
                 .trimmingCharacters(in: .whitespacesAndNewlines)
             let objectOID = cleanField(fields[index + 1])
@@ -175,7 +275,12 @@ actor GitRepositoryLoader {
             let oid = peeledOID.isEmpty ? objectOID : peeledOID
             let headMarker = fields[index + 3]
                 .trimmingCharacters(in: .whitespacesAndNewlines)
-            index += 4
+            let upstreamFullName = cleanField(fields[index + 4])
+            let upstreamShortName = cleanField(fields[index + 5])
+            let upstreamRemoteName = cleanField(fields[index + 6])
+            let upstreamRemoteRef = cleanField(fields[index + 7])
+            let upstreamTrack = cleanField(fields[index + 8])
+            index += 9
 
             guard let kind = referenceKind(fullName), !oid.isEmpty else { continue }
             references.append(
@@ -185,7 +290,15 @@ actor GitRepositoryLoader {
                     shortName: shortReferenceName(fullName, kind: kind),
                     targetOID: oid,
                     kind: kind,
-                    isCurrent: headMarker == "*"
+                    isCurrent: headMarker == "*",
+                    tracking: branchTracking(
+                        kind: kind,
+                        upstreamFullName: upstreamFullName,
+                        upstreamShortName: upstreamShortName,
+                        remoteName: upstreamRemoteName,
+                        remoteRef: upstreamRemoteRef,
+                        track: upstreamTrack
+                    )
                 )
             )
         }
@@ -201,9 +314,46 @@ actor GitRepositoryLoader {
         }
     }
 
+    private func branchTracking(
+        kind: GitReference.Kind,
+        upstreamFullName: String,
+        upstreamShortName: String,
+        remoteName: String,
+        remoteRef: String,
+        track: String
+    ) -> GitBranchTracking? {
+        guard kind == .local, !upstreamFullName.isEmpty else { return nil }
+
+        var aheadCount = 0
+        var behindCount = 0
+        for component in track.split(separator: ",") {
+            let fields = component.split(whereSeparator: \.isWhitespace)
+            guard let label = fields.first,
+                  let value = fields.last.flatMap({ Int($0) }) else {
+                continue
+            }
+            switch label {
+            case "ahead": aheadCount = value
+            case "behind": behindCount = value
+            default: break
+            }
+        }
+
+        return GitBranchTracking(
+            upstreamFullName: upstreamFullName,
+            upstreamShortName: upstreamShortName,
+            remoteName: remoteName,
+            remoteRef: remoteRef,
+            aheadCount: aheadCount,
+            behindCount: behindCount,
+            isGone: track == "gone"
+        )
+    }
+
     private func loadCommits(
         repository: GitRepository,
         references: [GitReference],
+        headOID: String?,
         revision: String,
         commitLimit: Int,
         pathFilter: String?
@@ -253,7 +403,9 @@ actor GitRepositoryLoader {
                     authorEmail: authorEmail,
                     authorDate: authorDate,
                     committerDate: committerDate,
-                    references: referencesByOID[oid] ?? []
+                    references: referencesByOID[oid] ?? [],
+                    isHead: oid == headOID,
+                    isWorkingTree: false
                 )
             )
         }
@@ -314,6 +466,44 @@ actor GitRepositoryLoader {
             } else {
                 files.append(
                     ChangedFile(status: status, path: firstPath, diffPaths: [firstPath])
+                )
+            }
+        }
+
+        return files
+    }
+
+    private func parseWorkingTreeFiles(_ data: Data) -> [ChangedFile] {
+        let fields = splitNullTerminated(data)
+        var files: [ChangedFile] = []
+        var index = 0
+
+        while index < fields.count {
+            let record = fields[index]
+            index += 1
+            guard record.count >= 3 else { continue }
+
+            let statusEnd = record.index(record.startIndex, offsetBy: 2)
+            let pathStart = record.index(after: statusEnd)
+            let status = String(record[..<statusEnd])
+                .trimmingCharacters(in: .whitespaces)
+            let currentPath = String(record[pathStart...])
+            guard !status.isEmpty, !currentPath.isEmpty else { continue }
+
+            if status.contains("R") || status.contains("C") {
+                guard index < fields.count else { break }
+                let originalPath = fields[index]
+                index += 1
+                files.append(
+                    ChangedFile(
+                        status: status,
+                        path: "\(originalPath) → \(currentPath)",
+                        diffPaths: [originalPath, currentPath]
+                    )
+                )
+            } else {
+                files.append(
+                    ChangedFile(status: status, path: currentPath, diffPaths: [currentPath])
                 )
             }
         }

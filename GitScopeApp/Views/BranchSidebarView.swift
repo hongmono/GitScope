@@ -107,11 +107,17 @@ struct BranchSidebarView: View {
                 title: referenceTitle(group),
                 systemImage: referenceIcon(group),
                 isSelected: model.selectedReferenceGroupID == group.id,
+                detail: trackingDetail(group),
                 accent: group.isCurrent ? .pink : .blue
             ) {
                 model.selectReferenceGroup(group)
             }
             .padding(.leading, 20 + CGFloat(depth * 20))
+            .contextMenu {
+                if group.kind == .local {
+                    branchContextMenu(group)
+                }
+            }
         case let .folder(folder, depth):
             SidebarDisclosureButton(
                 title: folder.name,
@@ -213,6 +219,101 @@ struct BranchSidebarView: View {
         return model.repositories
             .filter { repositoryIDs.contains($0.id) }
             .map(\.name)
+    }
+
+    private func repositoryName(_ reference: GitReference) -> String {
+        model.repositories.first(where: { $0.id == reference.repositoryID })?.name
+            ?? reference.repositoryID.rawValue
+    }
+
+    private func trackingDetail(_ group: MergedReferenceGroup) -> String? {
+        guard group.kind == .local else { return nil }
+        return group.references.map { reference in
+            let detail: String
+            if let tracking = reference.tracking {
+                detail = tracking.isGone
+                    ? "\(tracking.upstreamShortName) · 삭제됨"
+                    : "\(tracking.upstreamShortName) ↑\(tracking.aheadCount) ↓\(tracking.behindCount)"
+            } else {
+                detail = "upstream 없음"
+            }
+            guard group.references.count > 1 else { return detail }
+            return "\(repositoryName(reference)): \(detail)"
+        }
+        .joined(separator: "  ·  ")
+    }
+
+    @ViewBuilder
+    private func branchContextMenu(_ group: MergedReferenceGroup) -> some View {
+        Button {} label: {
+            Label(groupTrackingSummary(group), systemImage: "arrow.up.arrow.down")
+        }
+        .disabled(true)
+
+        Divider()
+
+        Button {
+            model.pullRebase(group.references)
+        } label: {
+            Label(
+                model.remoteOperation?.kind == .pull
+                    ? "Pull 중…"
+                    : "Pull (Rebase)",
+                systemImage: "arrow.down"
+            )
+        }
+        .disabled(
+            model.remoteOperation != nil
+                || pullTargets(in: group).isEmpty
+        )
+
+        Button {
+            model.push(group.references)
+        } label: {
+            Label(
+                model.remoteOperation?.kind == .push
+                    ? "Push 중…"
+                    : "Push",
+                systemImage: "arrow.up"
+            )
+        }
+        .disabled(
+            model.remoteOperation != nil
+                || pushTargets(in: group).isEmpty
+        )
+
+        if pullTargets(in: group).isEmpty {
+            Divider()
+            Button("Pull은 현재 브랜치에서만 가능") {}
+                .disabled(true)
+        }
+    }
+
+    private func pullTargets(in group: MergedReferenceGroup) -> [GitReference] {
+        group.references.filter {
+            $0.isCurrent && $0.tracking != nil && $0.tracking?.isGone != true
+        }
+    }
+
+    private func pushTargets(in group: MergedReferenceGroup) -> [GitReference] {
+        group.references.filter {
+            $0.tracking != nil && $0.tracking?.isGone != true
+        }
+    }
+
+    private func groupTrackingSummary(_ group: MergedReferenceGroup) -> String {
+        let tracked = group.references.compactMap(\.tracking)
+        guard !tracked.isEmpty else { return "Upstream이 설정되지 않음" }
+
+        let upstreams = Set(tracked.map(\.upstreamShortName))
+        let upstreamTitle = upstreams.count == 1
+            ? upstreams.first ?? "upstream"
+            : "\(upstreams.count)개 upstream"
+        let ahead = tracked.reduce(0) { $0 + $1.aheadCount }
+        let behind = tracked.reduce(0) { $0 + $1.behindCount }
+        let missingCount = group.references.count - tracked.count
+        let missingSuffix = missingCount > 0 ? " · 미설정 \(missingCount)" : ""
+        return "\(upstreamTitle) · ↑\(ahead) ↓\(behind)\(missingSuffix)"
     }
 
     private func referenceIcon(_ group: MergedReferenceGroup) -> String {
@@ -349,6 +450,7 @@ private struct SidebarButton: View {
     let title: String
     let systemImage: String
     let isSelected: Bool
+    var detail: String? = nil
     var accent: Color = .secondary
     let action: () -> Void
 
@@ -362,6 +464,15 @@ private struct SidebarButton: View {
                     .lineLimit(1)
                     .foregroundStyle(.primary)
                 Spacer(minLength: 0)
+                if let detail {
+                    Text(detail)
+                        .font(.system(size: 10, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .frame(maxWidth: 190, alignment: .trailing)
+                        .help(detail)
+                }
             }
             .font(.system(size: 12))
             .padding(.horizontal, 6)
