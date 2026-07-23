@@ -248,21 +248,94 @@ jobs:
           xcrun stapler validate "$APP_PATH"
           spctl --assess --type execute --verbose=4 "$APP_PATH"
 
-      - name: Package release artifact
+      - name: Package release artifacts
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
         run: |
           set -euo pipefail
           mkdir -p "$ARTIFACT_DIR"
           archive="$ARTIFACT_DIR/${APP_NAME}-${VERSION}-macOS-arm64.zip"
+          dmg="$ARTIFACT_DIR/${APP_NAME}-${VERSION}-macOS-arm64.dmg"
+          dmg_staging="$RUNNER_TEMP/dmg-staging"
 
           ditto -c -k --sequesterRsrc --keepParent "$APP_PATH" "$archive"
-          (
-            cd "$ARTIFACT_DIR"
-            shasum -a 256 "$(basename "$archive")" > "$(basename "$archive").sha256"
-          )
+          mkdir -p "$dmg_staging"
+          ditto "$APP_PATH" "$dmg_staging/${APP_NAME}.app"
+          ln -s /Applications "$dmg_staging/Applications"
+          hdiutil create \
+            -volname "$APP_NAME" \
+            -srcfolder "$dmg_staging" \
+            -ov \
+            -format UDZO \
+            "$dmg"
+          codesign \
+            --force \
+            --timestamp \
+            --sign "$APPLE_SIGNING_IDENTITY" \
+            "$dmg"
+          codesign --verify --verbose=2 "$dmg"
 
           {
             echo "RELEASE_ARCHIVE=$archive"
-            echo "RELEASE_CHECKSUM=$archive.sha256"
+            echo "RELEASE_DMG=$dmg"
+          } >> "$GITHUB_ENV"
+
+      - name: Notarize disk image
+        env:
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER_ID: ${{ secrets.APPLE_API_ISSUER_ID }}
+          APPLE_API_PRIVATE_KEY: ${{ secrets.APPLE_API_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          api_key_path="$RUNNER_TEMP/AuthKey_${APPLE_API_KEY_ID}.p8"
+          notarization_result="$RUNNER_TEMP/dmg-notarization-result.json"
+          notarization_log="$RUNNER_TEMP/dmg-notarization-log.json"
+
+          printf '%s' "$APPLE_API_PRIVATE_KEY" > "$api_key_path"
+          chmod 600 "$api_key_path"
+          xcrun notarytool submit "$RELEASE_DMG" \
+            --key "$api_key_path" \
+            --key-id "$APPLE_API_KEY_ID" \
+            --issuer "$APPLE_API_ISSUER_ID" \
+            --wait \
+            --output-format json > "$notarization_result"
+
+          notarization_id="$(plutil -extract id raw -o - "$notarization_result")"
+          notarization_status="$(plutil -extract status raw -o - "$notarization_result")"
+          if [[ "$notarization_status" != "Accepted" ]]; then
+            xcrun notarytool log "$notarization_id" \
+              --key "$api_key_path" \
+              --key-id "$APPLE_API_KEY_ID" \
+              --issuer "$APPLE_API_ISSUER_ID" \
+              "$notarization_log" || true
+            test ! -s "$notarization_log" || cat "$notarization_log"
+            echo "::error::DMG notarization failed with status: $notarization_status"
+            exit 1
+          fi
+
+          xcrun stapler staple "$RELEASE_DMG"
+          xcrun stapler validate "$RELEASE_DMG"
+          spctl --assess \
+            --type open \
+            --context context:primary-signature \
+            --verbose=4 \
+            "$RELEASE_DMG"
+
+      - name: Generate release checksums
+        run: |
+          set -euo pipefail
+          archive_checksum="$RELEASE_ARCHIVE.sha256"
+          dmg_checksum="$RELEASE_DMG.sha256"
+
+          (
+            cd "$ARTIFACT_DIR"
+            shasum -a 256 "$(basename "$RELEASE_ARCHIVE")" > "$(basename "$archive_checksum")"
+            shasum -a 256 "$(basename "$RELEASE_DMG")" > "$(basename "$dmg_checksum")"
+          )
+
+          {
+            echo "RELEASE_CHECKSUM=$archive_checksum"
+            echo "RELEASE_DMG_CHECKSUM=$dmg_checksum"
           } >> "$GITHUB_ENV"
 
       - name: Generate signed Sparkle appcast
@@ -298,6 +371,8 @@ jobs:
           set -euo pipefail
           archive_name="$(basename "$RELEASE_ARCHIVE")"
           checksum_name="$(basename "$RELEASE_CHECKSUM")"
+          dmg_name="$(basename "$RELEASE_DMG")"
+          dmg_checksum_name="$(basename "$RELEASE_DMG_CHECKSUM")"
           appcast_name="$(basename "$RELEASE_APPCAST")"
 
           if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
@@ -313,6 +388,8 @@ jobs:
             gh release upload "$RELEASE_TAG" \
               "$RELEASE_ARCHIVE" \
               "$RELEASE_CHECKSUM" \
+              "$RELEASE_DMG" \
+              "$RELEASE_DMG_CHECKSUM" \
               "$RELEASE_APPCAST" \
               --clobber \
               --repo "$GITHUB_REPOSITORY"
@@ -326,6 +403,8 @@ jobs:
             gh release upload "$RELEASE_TAG" \
               "$RELEASE_ARCHIVE" \
               "$RELEASE_CHECKSUM" \
+              "$RELEASE_DMG" \
+              "$RELEASE_DMG_CHECKSUM" \
               "$RELEASE_APPCAST" \
               --repo "$GITHUB_REPOSITORY"
           fi
@@ -336,6 +415,8 @@ jobs:
             --repo "$GITHUB_REPOSITORY")"
           grep -Fxq "$archive_name" <<< "$uploaded_assets"
           grep -Fxq "$checksum_name" <<< "$uploaded_assets"
+          grep -Fxq "$dmg_name" <<< "$uploaded_assets"
+          grep -Fxq "$dmg_checksum_name" <<< "$uploaded_assets"
           grep -Fxq "$appcast_name" <<< "$uploaded_assets"
           gh release edit "$RELEASE_TAG" \
             --draft=false \

@@ -5,7 +5,7 @@ GitScope는 `release` 브랜치를 배포 기준으로 사용합니다.
 - `release` 대상 pull request: Apple Silicon용 unsigned Release 빌드를 검증합니다.
 - `release` 브랜치 push 또는 해당 브랜치에서의 수동 실행: Developer ID로 서명하고 Apple 공증을 거쳐 GitHub Release를 생성합니다.
 - 버전 형식: `v0.1.<GitHub Actions run number>`
-- 산출물: `GitScope-<version>-macOS-arm64.zip`, SHA-256 체크섬, 서명된 `appcast.xml`
+- 산출물: `GitScope-<version>-macOS-arm64.zip`, 서명·공증된 `GitScope-<version>-macOS-arm64.dmg`, 각 파일의 SHA-256 체크섬, 서명된 `appcast.xml`
 
 pull request에서는 fork를 포함한 변경 코드에 Apple 인증 정보가 전달되지 않습니다. 서명과 공증은 `release` 브랜치에 반영된 코드에만 수행됩니다.
 
