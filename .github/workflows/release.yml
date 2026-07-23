@@ -204,7 +204,9 @@ jobs:
 
           for signed_item in "${signed_items[@]}"; do
             echo "Verifying secure timestamp: $signed_item"
-            codesign -dvv "$signed_item" 2>&1 | tee /dev/stderr | grep -q '^Timestamp='
+            signature_info="$(codesign -dvv "$signed_item" 2>&1)"
+            printf '%s\n' "$signature_info"
+            grep -q '^Timestamp=' <<< "$signature_info"
           done
 
       - name: Notarize app
