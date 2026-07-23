@@ -57,11 +57,11 @@ struct GitScopeApp: App {
             }
 
             CommandMenu("Git") {
-                Button("새로고침") {
-                    model.refresh()
+                Button("모든 원격 저장소 가져오기") {
+                    model.fetchAll()
                 }
                 .keyboardShortcut("r", modifiers: .command)
-                .disabled(model.workspaceURLs.isEmpty || model.isLoading)
+                .disabled(model.repositories.isEmpty || model.isLoading)
             }
         }
     }

@@ -68,6 +68,7 @@ private enum HistoryColumnMetrics {
     static let authorWidth: CGFloat = 108
     static let dateWidth: CGFloat = 112
     static let rowHeight: CGFloat = 24
+    static let topContentInset: CGFloat = 4
     static let minimumCommitWidth: CGFloat = 80
 }
 
@@ -157,6 +158,7 @@ private struct VirtualizedHistoryCollection: NSViewRepresentable {
     func makeNSView(context: Context) -> NSScrollView {
         let layout = VisibleRowsCollectionLayout()
         layout.rowHeight = HistoryColumnMetrics.rowHeight
+        layout.topInset = HistoryColumnMetrics.topContentInset
 
         let collectionView = ResizeAwareCollectionView()
         collectionView.collectionViewLayout = layout
@@ -421,13 +423,21 @@ private struct VirtualizedHistoryCollection: NSViewRepresentable {
 
             let visibleRect = scrollView.contentView.bounds
             let rowHeight = HistoryColumnMetrics.rowHeight
+            let firstVisibleY = max(
+                0,
+                visibleRect.minY - HistoryColumnMetrics.topContentInset
+            )
+            let lastVisibleY = max(
+                firstVisibleY,
+                visibleRect.maxY - HistoryColumnMetrics.topContentInset
+            )
             let firstIndex = min(
                 rows.count - 1,
-                max(0, Int(floor(visibleRect.minY / rowHeight)))
+                max(0, Int(floor(firstVisibleY / rowHeight)))
             )
             let lastIndex = min(
                 rows.count - 1,
-                max(firstIndex, Int(ceil(visibleRect.maxY / rowHeight)) - 1)
+                max(firstIndex, Int(ceil(lastVisibleY / rowHeight)) - 1)
             )
             let laneCount = rows[firstIndex...lastIndex]
                 .lazy
@@ -613,6 +623,7 @@ private final class HistoryCollectionItem: NSCollectionViewItem, NSPopoverDelega
 
 private final class VisibleRowsCollectionLayout: NSCollectionViewLayout {
     var rowHeight: CGFloat = 24
+    var topInset: CGFloat = 0
     private let overscanRatio: CGFloat = 0.10
 
     override var collectionViewContentSize: NSSize {
@@ -620,7 +631,7 @@ private final class VisibleRowsCollectionLayout: NSCollectionViewLayout {
         let itemCount = collectionView.numberOfItems(inSection: 0)
         return NSSize(
             width: collectionView.bounds.width,
-            height: CGFloat(itemCount) * rowHeight
+            height: topInset + CGFloat(itemCount) * rowHeight
         )
     }
 
@@ -629,13 +640,15 @@ private final class VisibleRowsCollectionLayout: NSCollectionViewLayout {
         let itemCount = collectionView.numberOfItems(inSection: 0)
         guard itemCount > 0 else { return [] }
         let visibleRect = collectionView.enclosingScrollView?.contentView.bounds ?? rect
-        let contentHeight = CGFloat(itemCount) * rowHeight
-        guard visibleRect.maxY >= 0, visibleRect.minY < contentHeight else { return [] }
+        let contentHeight = topInset + CGFloat(itemCount) * rowHeight
+        guard visibleRect.maxY >= topInset, visibleRect.minY < contentHeight else { return [] }
 
-        let firstVisible = max(0, Int(floor(visibleRect.minY / rowHeight)))
+        let firstVisibleY = max(0, visibleRect.minY - topInset)
+        let lastVisibleY = max(firstVisibleY, visibleRect.maxY - topInset)
+        let firstVisible = max(0, Int(floor(firstVisibleY / rowHeight)))
         let lastVisible = min(
             itemCount - 1,
-            max(firstVisible, Int(ceil(visibleRect.maxY / rowHeight)) - 1)
+            max(firstVisible, Int(ceil(lastVisibleY / rowHeight)) - 1)
         )
         let visibleRowCount = max(1, lastVisible - firstVisible + 1)
         let overscanRowCount = max(
@@ -671,7 +684,7 @@ private final class VisibleRowsCollectionLayout: NSCollectionViewLayout {
         let attributes = NSCollectionViewLayoutAttributes(forItemWith: indexPath)
         attributes.frame = NSRect(
             x: 0,
-            y: CGFloat(index) * rowHeight,
+            y: topInset + CGFloat(index) * rowHeight,
             width: width,
             height: rowHeight
         )

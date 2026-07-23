@@ -182,12 +182,8 @@ private struct FilterMenu<Content: View>: View {
         Menu {
             content
         } label: {
-            HStack(spacing: 3) {
-                Text(title)
-                    .lineLimit(1)
-                Image(systemName: "chevron.down")
-                    .font(.system(size: 8, weight: .semibold))
-            }
+            Text(title)
+                .lineLimit(1)
             .foregroundStyle(isActive ? Color.accentColor : .secondary)
         }
         .menuStyle(.borderlessButton)

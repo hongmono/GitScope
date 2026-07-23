@@ -171,13 +171,13 @@ private struct ToolWindowTabs: View {
             }
 
             Button {
-                model.refresh()
+                model.fetchAll()
             } label: {
                 Image(systemName: "arrow.clockwise")
             }
             .buttonStyle(.plain)
-            .disabled(model.workspaceURLs.isEmpty || model.isLoading)
-            .help("새로고침 (⌘R)")
+            .disabled(model.repositories.isEmpty || model.isLoading)
+            .help("모든 원격 저장소 가져오기 (⌘R)")
         }
         .font(.system(size: 12))
         .padding(.horizontal, 10)

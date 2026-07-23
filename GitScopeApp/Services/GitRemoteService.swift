@@ -35,6 +35,13 @@ enum GitRemoteServiceError: LocalizedError {
 actor GitRemoteService {
     private let runner = GitCommandRunner()
 
+    func fetchAll(repository: GitRepository) async throws {
+        _ = try await runner.runText(
+            repositoryURL: repository.rootURL,
+            arguments: ["-c", "color.ui=false", "fetch", "--all"]
+        )
+    }
+
     func pullRebase(repository: GitRepository, reference: GitReference) async throws {
         guard reference.kind == .local else {
             throw GitRemoteServiceError.localBranchRequired

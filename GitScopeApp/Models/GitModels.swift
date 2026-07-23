@@ -49,6 +49,7 @@ struct GitBranchTracking: Hashable, Sendable {
 }
 
 enum GitRemoteOperationKind: String, Sendable {
+    case fetch
     case pull
     case push
 }

@@ -142,6 +142,35 @@ final class AppModel: ObservableObject {
         )
     }
 
+    func fetchAll() {
+        guard remoteOperation == nil, let firstRepository = repositories.first else { return }
+
+        let operation = GitRemoteOperation(
+            repositoryID: firstRepository.id,
+            referenceID: repositories.map(\.id.rawValue).sorted().joined(separator: "::"),
+            kind: .fetch
+        )
+        remoteOperation = operation
+        errorMessage = nil
+        remoteTask = Task {
+            var failures: [String] = []
+            for repository in repositories {
+                do {
+                    try await remoteService.fetchAll(repository: repository)
+                } catch {
+                    failures.append("\(repository.name): \(error.localizedDescription)")
+                }
+            }
+            guard remoteOperation == operation else { return }
+            remoteOperation = nil
+            remoteTask = nil
+            refresh()
+            if !failures.isEmpty {
+                errorMessage = failures.joined(separator: "\n\n")
+            }
+        }
+    }
+
     func applyPathFilter() {
         refresh()
     }
@@ -404,6 +433,8 @@ final class AppModel: ObservableObject {
             for (repository, reference) in targets {
                 do {
                     switch kind {
+                    case .fetch:
+                        break
                     case .pull:
                         try await remoteService.pullRebase(
                             repository: repository,

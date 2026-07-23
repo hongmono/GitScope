@@ -226,21 +226,58 @@ struct BranchSidebarView: View {
             ?? reference.repositoryID.rawValue
     }
 
-    private func trackingDetail(_ group: MergedReferenceGroup) -> String? {
+    private func trackingDetail(_ group: MergedReferenceGroup) -> SidebarDetail? {
         guard group.kind == .local else { return nil }
-        return group.references.map { reference in
-            let detail: String
+        var text = AttributedString()
+        var helpParts: [String] = []
+
+        for (index, reference) in group.references.enumerated() {
+            if index > 0 {
+                text.append(AttributedString("  ·  "))
+            }
+            if group.references.count > 1 {
+                text.append(AttributedString("\(repositoryName(reference)): "))
+            }
+
             if let tracking = reference.tracking {
-                detail = tracking.isGone
+                text.append(AttributedString("\(tracking.upstreamShortName) "))
+                if tracking.isGone {
+                    var gone = AttributedString("· 삭제됨")
+                    gone.foregroundColor = .red
+                    text.append(gone)
+                } else {
+                    var ahead = AttributedString("↑\(tracking.aheadCount)")
+                    ahead.foregroundColor = .green
+                    text.append(ahead)
+                    text.append(AttributedString(" "))
+
+                    var behind = AttributedString("↓\(tracking.behindCount)")
+                    behind.foregroundColor = .orange
+                    text.append(behind)
+                }
+            } else {
+                text.append(AttributedString("upstream 없음"))
+            }
+
+            let plainDetail: String
+            if let tracking = reference.tracking {
+                plainDetail = tracking.isGone
                     ? "\(tracking.upstreamShortName) · 삭제됨"
                     : "\(tracking.upstreamShortName) ↑\(tracking.aheadCount) ↓\(tracking.behindCount)"
             } else {
-                detail = "upstream 없음"
+                plainDetail = "upstream 없음"
             }
-            guard group.references.count > 1 else { return detail }
-            return "\(repositoryName(reference)): \(detail)"
+            helpParts.append(
+                group.references.count > 1
+                    ? "\(repositoryName(reference)): \(plainDetail)"
+                    : plainDetail
+            )
         }
-        .joined(separator: "  ·  ")
+
+        return SidebarDetail(
+            text: text,
+            help: helpParts.joined(separator: "  ·  ")
+        )
     }
 
     @ViewBuilder
@@ -450,7 +487,7 @@ private struct SidebarButton: View {
     let title: String
     let systemImage: String
     let isSelected: Bool
-    var detail: String? = nil
+    var detail: SidebarDetail? = nil
     var accent: Color = .secondary
     let action: () -> Void
 
@@ -465,13 +502,13 @@ private struct SidebarButton: View {
                     .foregroundStyle(.primary)
                 Spacer(minLength: 0)
                 if let detail {
-                    Text(detail)
+                    Text(detail.text)
                         .font(.system(size: 10, design: .monospaced))
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                         .truncationMode(.middle)
                         .frame(maxWidth: 190, alignment: .trailing)
-                        .help(detail)
+                        .help(detail.help)
                 }
             }
             .font(.system(size: 12))
@@ -493,4 +530,9 @@ private struct SidebarButton: View {
             }
         }
     }
+}
+
+private struct SidebarDetail {
+    let text: AttributedString
+    let help: String
 }
