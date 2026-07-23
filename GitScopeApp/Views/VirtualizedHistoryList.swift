@@ -28,6 +28,7 @@ struct VirtualizedHistoryList: View {
     let selectedCommitID: CommitID?
     let graphColumnWidth: CGFloat
     let graphLaneCount: Int
+    let showsRepositoryColumn: Bool
     let repositoryColorIndices: [RepositoryID: Int]
     let onSelect: (GitCommit) -> Void
     let onClearSelection: () -> Void
@@ -38,7 +39,8 @@ struct VirtualizedHistoryList: View {
             let visibility = HistoryColumnVisibility(
                 availableWidth: proxy.size.width,
                 graphColumnWidth: graphColumnWidth,
-                graphLaneCount: graphLaneCount
+                graphLaneCount: graphLaneCount,
+                showsRepository: showsRepositoryColumn
             )
 
             VStack(spacing: 0) {
@@ -65,6 +67,7 @@ struct VirtualizedHistoryList: View {
 
 private enum HistoryColumnMetrics {
     static let repositoryWidth: CGFloat = 132
+    static let singleRepositoryLeadingInset: CGFloat = 4
     static let authorWidth: CGFloat = 108
     static let dateWidth: CGFloat = 112
     static let rowHeight: CGFloat = 24
@@ -75,19 +78,29 @@ private enum HistoryColumnMetrics {
 private struct HistoryColumnVisibility: Equatable {
     let graphColumnWidth: CGFloat
     let laneSpacing: CGFloat
+    let showsRepository: Bool
     let showsAuthor: Bool
     let showsDate: Bool
 
-    init(availableWidth: CGFloat, graphColumnWidth: CGFloat, graphLaneCount: Int) {
+    init(
+        availableWidth: CGFloat,
+        graphColumnWidth: CGFloat,
+        graphLaneCount: Int,
+        showsRepository: Bool
+    ) {
         self.graphColumnWidth = graphColumnWidth
+        self.showsRepository = showsRepository
         laneSpacing = graphLaneCount > 1
             ? min(18, (self.graphColumnWidth - 40) / CGFloat(graphLaneCount - 1))
             : 18
 
-        let coreWidth = HistoryColumnMetrics.repositoryWidth
+        let repositoryWidth = showsRepository
+            ? HistoryColumnMetrics.repositoryWidth + 1
+            : HistoryColumnMetrics.singleRepositoryLeadingInset
+        let coreWidth = repositoryWidth
             + self.graphColumnWidth
             + HistoryColumnMetrics.minimumCommitWidth
-            + 2
+            + 1
         let authorThreshold = coreWidth + HistoryColumnMetrics.authorWidth + 1
         let dateThreshold = authorThreshold + HistoryColumnMetrics.dateWidth + 1
         showsAuthor = availableWidth >= authorThreshold
@@ -101,8 +114,13 @@ private struct HistoryColumnHeader: View {
 
     var body: some View {
         HStack(spacing: 0) {
-            headerCell("저장소", width: HistoryColumnMetrics.repositoryWidth)
-            columnDivider
+            if visibility.showsRepository {
+                headerCell("저장소", width: HistoryColumnMetrics.repositoryWidth)
+                columnDivider
+            } else {
+                Color.clear
+                    .frame(width: HistoryColumnMetrics.singleRepositoryLeadingInset)
+            }
             headerCell("그래프", width: graphColumnWidth)
             columnDivider
             Text("커밋")
@@ -246,7 +264,8 @@ private struct VirtualizedHistoryCollection: NSViewRepresentable {
         private var visibility = HistoryColumnVisibility(
             availableWidth: .greatestFiniteMagnitude,
             graphColumnWidth: 112,
-            graphLaneCount: 1
+            graphLaneCount: 1,
+            showsRepository: true
         )
         private var onSelect: ((GitCommit) -> Void)?
         private var onClearSelection: (() -> Void)?
@@ -705,16 +724,21 @@ private struct VirtualizedHistoryRow: View {
 
     var body: some View {
         HStack(spacing: 0) {
-            RepositoryHistoryCell(
-                commit: row.commit,
-                colorIndex: repositoryColorIndex,
-                showsName: showsRepositoryName,
-                isSelected: isSelected
-            )
+            if visibility.showsRepository {
+                RepositoryHistoryCell(
+                    commit: row.commit,
+                    colorIndex: repositoryColorIndex,
+                    showsName: showsRepositoryName,
+                    isSelected: isSelected
+                )
                 .frame(width: HistoryColumnMetrics.repositoryWidth)
                 .fixedSize(horizontal: true, vertical: false)
                 .layoutPriority(3)
-            columnDivider
+                columnDivider
+            } else {
+                Color.clear
+                    .frame(width: HistoryColumnMetrics.singleRepositoryLeadingInset)
+            }
             CommitGraphView(
                 layout: row.graph,
                 commit: row.commit,

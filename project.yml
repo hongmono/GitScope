@@ -21,7 +21,7 @@ targets:
     info:
       path: GitScopeApp/Info.plist
       properties:
-        CFBundleDisplayName: GitScope
+        CFBundleDisplayName: $(APP_DISPLAY_NAME)
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         LSApplicationCategoryType: public.app-category.developer-tools
@@ -32,14 +32,21 @@ targets:
         SURequireSignedFeed: true
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: dev.hongmono.gitscope
-        PRODUCT_NAME: GitScope
         MARKETING_VERSION: 0.1.0
         CURRENT_PROJECT_VERSION: 1
         ENABLE_APP_SANDBOX: NO
         ENABLE_HARDENED_RUNTIME: YES
         CODE_SIGN_STYLE: Automatic
         SWIFT_STRICT_CONCURRENCY: complete
+      configs:
+        Debug:
+          APP_DISPLAY_NAME: GitScope Dev
+          PRODUCT_BUNDLE_IDENTIFIER: dev.hongmono.gitscope.debug
+          PRODUCT_NAME: GitScope Dev
+        Release:
+          APP_DISPLAY_NAME: GitScope
+          PRODUCT_BUNDLE_IDENTIFIER: dev.hongmono.gitscope
+          PRODUCT_NAME: GitScope
     dependencies:
       - package: Sparkle
     scheme:

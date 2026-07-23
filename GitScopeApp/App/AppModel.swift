@@ -4,6 +4,8 @@ import Foundation
 
 @MainActor
 final class AppModel: ObservableObject {
+    @Published private(set) var workspaceTabs: [WorkspaceTab] = []
+    @Published private(set) var activeWorkspaceTabID: WorkspaceTab.ID?
     @Published private(set) var workspaceURLs: [URL] = []
     @Published private(set) var repositories: [GitRepository] = []
     @Published private(set) var referencesByRepository: [RepositoryID: [GitReference]] = [:]
@@ -49,6 +51,8 @@ final class AppModel: ObservableObject {
     private var queryTask: Task<Void, Never>?
     private var remoteTask: Task<Void, Never>?
     private var hasRestoredWorkspace = false
+    private static let workspaceTabsDefaultsKey = "workspaceTabs.v1"
+    private static let activeWorkspaceTabDefaultsKey = "activeWorkspaceTabID.v1"
 
     var availableAuthors: [String] {
         Array(Set(allCommits.filter { !$0.isWorkingTree }.map(\.authorName))).sorted()
@@ -82,6 +86,10 @@ final class AppModel: ObservableObject {
         workspaceURLs.first
     }
 
+    var activeWorkspaceTab: WorkspaceTab? {
+        workspaceTabs.first { $0.id == activeWorkspaceTabID }
+    }
+
     var isLoading: Bool {
         isLoadingWorkspace || isLoadingReference || remoteOperation != nil
     }
@@ -109,28 +117,103 @@ final class AppModel: ObservableObject {
         guard !hasRestoredWorkspace else { return }
         hasRestoredWorkspace = true
         let defaults = UserDefaults.standard
-        let paths = defaults.stringArray(forKey: "lastWorkspacePaths")
+        let decoder = JSONDecoder()
+        let restoredTabs = defaults.data(forKey: Self.workspaceTabsDefaultsKey)
+            .flatMap { try? decoder.decode([WorkspaceTab].self, from: $0) }
+            .map(validTabs(_:))
+            ?? []
+
+        if !restoredTabs.isEmpty {
+            workspaceTabs = restoredTabs
+            let restoredActiveID = defaults.string(
+                forKey: Self.activeWorkspaceTabDefaultsKey
+            ).flatMap(UUID.init(uuidString:))
+            let activeID = restoredTabs.contains { $0.id == restoredActiveID }
+                ? restoredActiveID
+                : restoredTabs.first?.id
+            if let activeID {
+                activateWorkspaceTab(activeID)
+            }
+            return
+        }
+
+        let legacyPaths = defaults.stringArray(forKey: "lastWorkspacePaths")
             ?? defaults.string(forKey: "lastWorkspacePath").map { [$0] }
             ?? []
-        let urls = paths
-            .map { URL(fileURLWithPath: $0, isDirectory: true) }
-            .filter { FileManager.default.fileExists(atPath: $0.path) }
-        guard !urls.isEmpty else { return }
-        loadWorkspaces(urls)
+        let validLegacyPaths = validPaths(legacyPaths)
+        guard !validLegacyPaths.isEmpty else { return }
+        let legacyTab = WorkspaceTab(paths: validLegacyPaths)
+        workspaceTabs = [legacyTab]
+        persistWorkspaceTabs()
+        activateWorkspaceTab(legacyTab.id)
     }
 
     func openWorkspace() {
         guard remoteOperation == nil else { return }
         let panel = NSOpenPanel()
-        panel.title = "Git 저장소 또는 워크스페이스 선택"
-        panel.prompt = "열기"
+        panel.title = "Git 저장소 또는 워크스페이스를 새 탭으로 열기"
+        panel.prompt = "새 탭으로 열기"
         panel.canChooseDirectories = true
         panel.canChooseFiles = false
         panel.allowsMultipleSelection = true
         panel.canCreateDirectories = false
 
         guard panel.runModal() == .OK, !panel.urls.isEmpty else { return }
-        loadWorkspaces(panel.urls)
+        addWorkspaceTabs(panel.urls)
+    }
+
+    func activateWorkspaceTab(_ id: WorkspaceTab.ID) {
+        guard remoteOperation == nil,
+              let tab = workspaceTabs.first(where: { $0.id == id }) else {
+            return
+        }
+        if activeWorkspaceTabID == id {
+            if workspaceURLs.isEmpty, !isLoadingWorkspace {
+                loadWorkspaces(
+                    tab.paths.map { URL(fileURLWithPath: $0, isDirectory: true) }
+                )
+            }
+            return
+        }
+
+        unloadCurrentWorkspace()
+        activeWorkspaceTabID = id
+        persistWorkspaceTabs()
+        loadWorkspaces(
+            tab.paths.map { URL(fileURLWithPath: $0, isDirectory: true) }
+        )
+    }
+
+    func activateWorkspaceTab(at index: Int) {
+        guard workspaceTabs.indices.contains(index) else { return }
+        activateWorkspaceTab(workspaceTabs[index].id)
+    }
+
+    func closeWorkspaceTab(_ id: WorkspaceTab.ID) {
+        guard remoteOperation == nil,
+              let closingIndex = workspaceTabs.firstIndex(where: { $0.id == id }) else {
+            return
+        }
+
+        let isClosingActiveTab = activeWorkspaceTabID == id
+        let nextTabID: WorkspaceTab.ID? = if workspaceTabs.count > 1 {
+            closingIndex == workspaceTabs.count - 1
+                ? workspaceTabs[closingIndex - 1].id
+                : workspaceTabs[closingIndex + 1].id
+        } else {
+            nil
+        }
+
+        if isClosingActiveTab {
+            unloadCurrentWorkspace()
+            activeWorkspaceTabID = nil
+        }
+        workspaceTabs.remove(at: closingIndex)
+        persistWorkspaceTabs()
+
+        if isClosingActiveTab, let nextTabID {
+            activateWorkspaceTab(nextTabID)
+        }
     }
 
     func refresh() {
@@ -501,8 +584,6 @@ final class AppModel: ObservableObject {
                 selectedReferenceGroupID = nil
                 isCurrentBranchesSelected = false
                 branchMembership = nil
-                UserDefaults.standard.set(uniqueURLs.map(\.path), forKey: "lastWorkspacePaths")
-                UserDefaults.standard.removeObject(forKey: "lastWorkspacePath")
                 rebuildRows()
             } catch {
                 guard !Task.isCancelled else { return }
@@ -520,6 +601,109 @@ final class AppModel: ObservableObject {
             let normalizedURL = url.standardizedFileURL.resolvingSymlinksInPath()
             return seenPaths.insert(normalizedURL.path).inserted ? normalizedURL : nil
         }
+    }
+
+    private func addWorkspaceTabs(_ urls: [URL]) {
+        let normalizedURLs = uniqueWorkspaceURLs(urls)
+        guard !normalizedURLs.isEmpty else { return }
+
+        var firstSelectedTabID: WorkspaceTab.ID?
+        for url in normalizedURLs {
+            let path = url.path
+            if let existingTab = workspaceTabs.first(where: { $0.paths == [path] }) {
+                firstSelectedTabID = firstSelectedTabID ?? existingTab.id
+                continue
+            }
+            let tab = WorkspaceTab(paths: [path])
+            workspaceTabs.append(tab)
+            firstSelectedTabID = firstSelectedTabID ?? tab.id
+        }
+        persistWorkspaceTabs()
+
+        if let firstSelectedTabID {
+            activateWorkspaceTab(firstSelectedTabID)
+        }
+    }
+
+    private func unloadCurrentWorkspace() {
+        workspaceTask?.cancel()
+        referenceTask?.cancel()
+        detailsTask?.cancel()
+        patchTask?.cancel()
+        queryTask?.cancel()
+        workspaceTask = nil
+        referenceTask = nil
+        detailsTask = nil
+        patchTask = nil
+        queryTask = nil
+
+        workspaceURLs.removeAll(keepingCapacity: false)
+        repositories.removeAll(keepingCapacity: false)
+        referencesByRepository.removeAll(keepingCapacity: false)
+        visibleRepositoryIDs.removeAll(keepingCapacity: false)
+        rows.removeAll(keepingCapacity: false)
+        allCommits.removeAll(keepingCapacity: false)
+        branchMembership = nil
+        selectedCommit = nil
+        selectedDetails = nil
+        selectedFile = nil
+        selectedPatch = nil
+        selectedReference = nil
+        selectedReferenceGroupID = nil
+        repositoryScope = nil
+        isCurrentBranchesSelected = false
+
+        isLoadingWorkspace = false
+        isLoadingReference = false
+        isLoadingDetails = false
+        isLoadingPatch = false
+        errorMessage = nil
+
+        query = ""
+        branchSearch = ""
+        pathFilter = ""
+        authorFilter = nil
+        dateScope = .all
+        queryTask?.cancel()
+        queryTask = nil
+    }
+
+    private func validTabs(_ tabs: [WorkspaceTab]) -> [WorkspaceTab] {
+        tabs.compactMap { tab in
+            let paths = validPaths(tab.paths)
+            return paths.isEmpty ? nil : WorkspaceTab(id: tab.id, paths: paths)
+        }
+    }
+
+    private func validPaths(_ paths: [String]) -> [String] {
+        var seenPaths = Set<String>()
+        return paths.compactMap { path in
+            let url = URL(fileURLWithPath: path, isDirectory: true)
+                .standardizedFileURL
+                .resolvingSymlinksInPath()
+            guard FileManager.default.fileExists(atPath: url.path),
+                  seenPaths.insert(url.path).inserted else {
+                return nil
+            }
+            return url.path
+        }
+    }
+
+    private func persistWorkspaceTabs() {
+        let defaults = UserDefaults.standard
+        if let data = try? JSONEncoder().encode(workspaceTabs) {
+            defaults.set(data, forKey: Self.workspaceTabsDefaultsKey)
+        }
+        if let activeWorkspaceTabID {
+            defaults.set(
+                activeWorkspaceTabID.uuidString,
+                forKey: Self.activeWorkspaceTabDefaultsKey
+            )
+        } else {
+            defaults.removeObject(forKey: Self.activeWorkspaceTabDefaultsKey)
+        }
+        defaults.removeObject(forKey: "lastWorkspacePaths")
+        defaults.removeObject(forKey: "lastWorkspacePath")
     }
 
     private func rebuildRows() {

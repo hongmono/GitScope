@@ -1,6 +1,26 @@
 import Foundation
 import SwiftUI
 
+struct WorkspaceTab: Identifiable, Codable, Equatable, Sendable {
+    let id: UUID
+    let paths: [String]
+
+    init(id: UUID = UUID(), paths: [String]) {
+        self.id = id
+        self.paths = paths
+    }
+
+    var title: String {
+        guard let firstPath = paths.first else { return "워크스페이스" }
+        let firstName = URL(fileURLWithPath: firstPath).lastPathComponent
+        return paths.count == 1 ? firstName : "\(firstName) 외 \(paths.count - 1)"
+    }
+
+    var subtitle: String {
+        paths.joined(separator: "\n")
+    }
+}
+
 struct RepositoryID: Hashable, Sendable, Codable, Identifiable {
     let rawValue: String
     var id: String { rawValue }

@@ -40,6 +40,7 @@ struct HistoryView: View {
                     selectedCommitID: model.selectedCommit?.id,
                     graphColumnWidth: graphColumnWidth,
                     graphLaneCount: graphLaneCount,
+                    showsRepositoryColumn: model.repositories.count > 1,
                     repositoryColorIndices: repositoryColorIndices
                 ) { commit in
                     model.selectCommit(commit)

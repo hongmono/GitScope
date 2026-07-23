@@ -24,6 +24,7 @@ struct ContentView: View {
                         .transition(.opacity)
                 } else {
                     workspaceContent
+                        .id(model.activeWorkspaceTabID)
                         .transition(.opacity)
 
                     if model.isLoadingWorkspace {
@@ -130,13 +131,28 @@ private struct ToolWindowTabs: View {
 
     var body: some View {
         HStack(spacing: 4) {
-            ToolTab(title: "Git", isSelected: false)
-            ToolTab(title: "로그", isSelected: true)
-            ToolTab(title: "콘솔", isSelected: false)
-
-            Divider()
-                .frame(height: 17)
-                .padding(.horizontal, 3)
+            if !model.workspaceTabs.isEmpty {
+                ScrollView(.horizontal) {
+                    HStack(spacing: 4) {
+                        ForEach(model.workspaceTabs) { tab in
+                            WorkspaceTabItem(
+                                tab: tab,
+                                isSelected: model.activeWorkspaceTabID == tab.id,
+                                isDisabled: model.remoteOperation != nil,
+                                onSelect: {
+                                    model.activateWorkspaceTab(tab.id)
+                                },
+                                onClose: {
+                                    model.closeWorkspaceTab(tab.id)
+                                }
+                            )
+                        }
+                    }
+                }
+                .scrollIndicators(.hidden)
+                .frame(maxWidth: 640, alignment: .leading)
+                .layoutPriority(1)
+            }
 
             Button {
                 model.openWorkspace()
@@ -149,17 +165,8 @@ private struct ToolWindowTabs: View {
 
             Spacer()
 
-            if model.workspaceURLs.count == 1, let workspaceURL = model.workspaceURL {
-                Image(systemName: "folder")
-                    .foregroundStyle(.secondary)
-                Text(workspaceURL.lastPathComponent)
-                    .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-            } else if !model.workspaceURLs.isEmpty {
-                Image(systemName: "folder.badge.plus")
-                    .foregroundStyle(.secondary)
-                Text("\(model.workspaceURLs.count)개 위치 · \(model.repositories.count)개 저장소")
+            if model.repositories.count > 1 {
+                Text("\(model.repositories.count)개 저장소")
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
             }
@@ -186,19 +193,59 @@ private struct ToolWindowTabs: View {
     }
 }
 
-private struct ToolTab: View {
-    let title: String
+private struct WorkspaceTabItem: View {
+    let tab: WorkspaceTab
     let isSelected: Bool
+    let isDisabled: Bool
+    let onSelect: () -> Void
+    let onClose: () -> Void
 
     var body: some View {
-        Text(title)
-            .font(.system(size: 12, weight: isSelected ? .semibold : .regular))
-            .padding(.horizontal, 10)
-            .frame(height: 26)
-            .background(
-                RoundedRectangle(cornerRadius: 4)
-                    .fill(isSelected ? Color(nsColor: .selectedControlColor).opacity(0.14) : .clear)
-            )
+        HStack(spacing: 3) {
+            Button(action: onSelect) {
+                HStack(spacing: 5) {
+                    Image(systemName: "folder")
+                        .foregroundStyle(isSelected ? Color.accentColor : .secondary)
+                    Text(tab.title)
+                        .font(.system(size: 11, weight: isSelected ? .semibold : .regular))
+                        .lineLimit(1)
+                }
+            }
+            .buttonStyle(.plain)
+            .disabled(isDisabled)
+
+            Button(action: onClose) {
+                Image(systemName: "xmark")
+                    .font(.system(size: 8, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 15, height: 15)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .disabled(isDisabled)
+            .help("탭 닫기")
+        }
+        .padding(.leading, 8)
+        .padding(.trailing, 4)
+        .frame(minWidth: 90, maxWidth: 180, minHeight: 26)
+        .background(
+            RoundedRectangle(cornerRadius: 5)
+                .fill(
+                    isSelected
+                        ? Color(nsColor: .selectedControlColor).opacity(0.16)
+                        : Color.clear
+                )
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 5)
+                .stroke(
+                    isSelected
+                        ? Color(nsColor: .separatorColor).opacity(0.6)
+                        : Color.clear,
+                    lineWidth: 0.5
+                )
+        )
+        .help(tab.subtitle)
     }
 }
 
