@@ -38,9 +38,9 @@
         <a href="#signals">그래프</a>
         <a href="https://github.com/hongmono/GitScope">GitHub</a>
       </nav>
-      <a class="header-download" href="https://github.com/hongmono/GitScope/releases/latest">
-        DMG 받기
-        <span aria-hidden="true">↘</span>
+      <a class="header-download" href="#install">
+        Homebrew 설치
+        <span aria-hidden="true">↓</span>
       </a>
     </header>
 
@@ -59,9 +59,9 @@
               여러 저장소의 커밋과 작업 상태를 한 화면에서 읽고, 필요한 순간에만 안전하게 동기화하세요.
             </p>
             <div class="hero-actions">
-              <a class="button button-dark" href="https://github.com/hongmono/GitScope/releases/latest">
-                최신 DMG 받기
-                <span aria-hidden="true">↘</span>
+              <a class="button button-dark" href="#install">
+                Homebrew로 설치
+                <span aria-hidden="true">↓</span>
               </a>
               <a class="text-link" href="https://github.com/hongmono/GitScope">
                 소스 보기
@@ -157,18 +157,30 @@
         </figure>
       </section>
 
-      <section class="download" aria-labelledby="download-title">
+      <section class="download" id="install" aria-labelledby="download-title">
         <div class="download-branch" aria-hidden="true">
           <i></i><i></i><i></i><i></i><i></i>
         </div>
         <div class="download-copy reveal">
-          <p class="eyebrow">Built for macOS</p>
-          <h2 id="download-title">Git을 바꾸기 전에,<br />Git을 읽는 도구.</h2>
+          <p class="eyebrow">Install with Homebrew</p>
+          <h2 id="download-title">터미널 한 줄로,<br />GitScope 시작.</h2>
           <p>Apple Silicon과 macOS 14 이상에서 사용할 수 있습니다.</p>
-          <a class="button button-dark" href="https://github.com/hongmono/GitScope/releases/latest">
-            GitScope 다운로드
-            <span aria-hidden="true">↘</span>
-          </a>
+          <div class="install-command" aria-label="Homebrew 설치 명령">
+            <code>brew install hongmono/tap/gitscope</code>
+            <button
+              class="copy-command"
+              type="button"
+              data-copy="brew install hongmono/tap/gitscope"
+            >
+              <span aria-live="polite">복사</span>
+            </button>
+          </div>
+          <p class="manual-install">
+            Homebrew를 사용하지 않는다면
+            <a href="https://github.com/hongmono/GitScope/releases/latest">
+              DMG 직접 받기 <span aria-hidden="true">↗</span>
+            </a>
+          </p>
         </div>
         <div class="scope reveal">
           <div>

@@ -2,11 +2,17 @@
 
 IntelliJ의 Git Log 화면과 GitKraken 스타일 그래프를 독립 macOS 앱으로 옮긴 Apple Silicon 전용 Git 이력 뷰어입니다. 여러 저장소의 브랜치와 작업 상태를 하나의 타임라인에서 확인하고, 현재 브랜치를 안전하게 동기화할 수 있습니다.
 
-[홈페이지](https://hongmono.github.io/GitScope/) · [최신 버전 다운로드](https://github.com/hongmono/GitScope/releases/latest)
+[홈페이지](https://hongmono.github.io/GitScope/) · [GitHub Releases](https://github.com/hongmono/GitScope/releases/latest)
 
 ## 설치
 
-[GitHub Releases](https://github.com/hongmono/GitScope/releases/latest)에서 최신 Apple Silicon용 DMG를 내려받아 `GitScope.app`을 Applications 폴더로 옮깁니다. 배포본은 Developer ID로 서명되고 Apple 공증을 거치며, 앱 안에서 Sparkle 자동 업데이트를 지원합니다.
+Homebrew로 설치합니다.
+
+```sh
+brew install hongmono/tap/gitscope
+```
+
+Homebrew를 사용하지 않는 경우 [GitHub Releases](https://github.com/hongmono/GitScope/releases/latest)에서 최신 Apple Silicon용 DMG를 내려받아 `GitScope.app`을 Applications 폴더로 옮길 수 있습니다. 배포본은 Developer ID로 서명되고 Apple 공증을 거치며, 앱 안에서 Sparkle 자동 업데이트를 지원합니다.
 
 - 지원 환경: macOS 14 이상
 - 지원 아키텍처: Apple Silicon
