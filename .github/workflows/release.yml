@@ -151,6 +151,8 @@ jobs:
             CODE_SIGN_STYLE=Manual \
             CODE_SIGN_IDENTITY="$APPLE_SIGNING_IDENTITY" \
             DEVELOPMENT_TEAM="$DEVELOPMENT_TEAM" \
+            CODE_SIGN_INJECT_BASE_ENTITLEMENTS=NO \
+            OTHER_CODE_SIGN_FLAGS="--timestamp" \
             MARKETING_VERSION="$VERSION" \
             CURRENT_PROJECT_VERSION="$GITHUB_RUN_NUMBER" \
             build
@@ -161,6 +163,20 @@ jobs:
           test -n "$(/usr/libexec/PlistBuddy -c 'Print :SUPublicEDKey' "$info_plist")"
           codesign --verify --deep --strict --verbose=2 "$APP_PATH"
 
+          sparkle_framework="$APP_PATH/Contents/Frameworks/Sparkle.framework/Versions/Current"
+          signed_items=(
+            "$APP_PATH"
+            "$sparkle_framework"
+            "$sparkle_framework/Autoupdate"
+            "$sparkle_framework/Updater.app"
+            "$sparkle_framework/XPCServices/Downloader.xpc"
+            "$sparkle_framework/XPCServices/Installer.xpc"
+          )
+
+          for signed_item in "${signed_items[@]}"; do
+            codesign -dvv "$signed_item" 2>&1 | grep -q '^Timestamp='
+          done
+
       - name: Notarize app
         env:
           APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
@@ -170,6 +186,8 @@ jobs:
           set -euo pipefail
           api_key_path="$RUNNER_TEMP/AuthKey_${APPLE_API_KEY_ID}.p8"
           notarization_archive="$RUNNER_TEMP/${APP_NAME}-notarization.zip"
+          notarization_result="$RUNNER_TEMP/notarization-result.json"
+          notarization_log="$RUNNER_TEMP/notarization-log.json"
 
           printf '%s' "$APPLE_API_PRIVATE_KEY" > "$api_key_path"
           chmod 600 "$api_key_path"
@@ -178,7 +196,22 @@ jobs:
             --key "$api_key_path" \
             --key-id "$APPLE_API_KEY_ID" \
             --issuer "$APPLE_API_ISSUER_ID" \
-            --wait
+            --wait \
+            --output-format json > "$notarization_result"
+
+          notarization_id="$(plutil -extract id raw -o - "$notarization_result")"
+          notarization_status="$(plutil -extract status raw -o - "$notarization_result")"
+          if [[ "$notarization_status" != "Accepted" ]]; then
+            xcrun notarytool log "$notarization_id" \
+              --key "$api_key_path" \
+              --key-id "$APPLE_API_KEY_ID" \
+              --issuer "$APPLE_API_ISSUER_ID" \
+              "$notarization_log" || true
+            test ! -s "$notarization_log" || cat "$notarization_log"
+            echo "::error::Apple notarization failed with status: $notarization_status"
+            exit 1
+          fi
+
           xcrun stapler staple "$APP_PATH"
           xcrun stapler validate "$APP_PATH"
           spctl --assess --type execute --verbose=4 "$APP_PATH"
