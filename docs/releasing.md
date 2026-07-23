@@ -6,6 +6,7 @@ GitScope는 `release` 브랜치를 배포 기준으로 사용합니다.
 - `release` 브랜치 push 또는 해당 브랜치에서의 수동 실행: Developer ID로 서명하고 Apple 공증을 거쳐 GitHub Release를 생성합니다.
 - 버전 형식: `v0.1.<GitHub Actions run number>`
 - 산출물: `GitScope-<version>-macOS-arm64.zip`, 서명·공증된 `GitScope-<version>-macOS-arm64.dmg`, 각 파일의 SHA-256 체크섬, 서명된 `appcast.xml`
+- 업데이트 로그: 배포 전에 `RELEASE_NOTES.md`를 사용자 관점의 변경 사항으로 갱신합니다. 동일한 내용이 GitHub Release 본문과 Sparkle 업데이트 화면에 포함됩니다.
 
 pull request에서는 fork를 포함한 변경 코드에 Apple 인증 정보가 전달되지 않습니다. 서명과 공증은 `release` 브랜치에 반영된 코드에만 수행됩니다.
 
