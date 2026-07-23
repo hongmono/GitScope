@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta
       name="description"
-      content="GitScope는 여러 저장소의 커밋, 브랜치, 작업 상태를 한 화면에서 읽고 안전하게 동기화하는 macOS Git 이력 뷰어입니다."
+      content="GitScope는 여러 저장소의 커밋, 브랜치, 작업 상태와 GitHub Actions 결과를 한 화면에서 읽고 안전하게 동기화하는 macOS Git 이력 뷰어입니다."
     />
     <meta name="theme-color" content="#f4f3ee" media="(prefers-color-scheme: light)" />
     <meta name="theme-color" content="#0c1011" media="(prefers-color-scheme: dark)" />
@@ -14,7 +14,7 @@
     <meta property="og:title" content="GitScope | Git history, in focus" />
     <meta
       property="og:description"
-      content="여러 저장소의 브랜치와 작업 상태를 하나의 선명한 타임라인에서 확인하세요."
+      content="여러 저장소의 브랜치, 작업 상태와 GitHub Actions 결과를 하나의 선명한 타임라인에서 확인하세요."
     />
     <meta property="og:url" content="https://hongmono.github.io/GitScope/" />
     <meta property="og:image" content="https://hongmono.github.io/GitScope/assets/og.jpg" />
@@ -56,7 +56,7 @@
           </div>
           <div class="hero-side reveal">
             <p>
-              여러 저장소의 커밋과 작업 상태를 한 화면에서 읽고, 필요한 순간에만 안전하게 동기화하세요.
+              여러 저장소의 커밋과 Actions 상태를 한 화면에서 읽고, 필요한 순간에만 안전하게 동기화하세요.
             </p>
             <div class="hero-actions">
               <a class="button button-dark" href="#install">
@@ -75,7 +75,7 @@
           <div class="shot-halo" aria-hidden="true"></div>
           <img
             src="assets/gitscope-window.webp"
-            alt="GitScope에서 Lathe 저장소의 브랜치와 약 10개의 커밋 그래프를 확인하는 화면"
+            alt="GitScope에서 Lathe 저장소의 브랜치, 커밋 그래프와 GitHub Actions 성공 상태를 확인하는 화면"
             width="4160"
             height="900"
             fetchpriority="high"
@@ -113,6 +113,11 @@
             <p>HEAD, 브랜치, 태그와 앞선 커밋, 뒤처진 커밋을 한 흐름에서 봅니다.</p>
           </article>
           <article class="feature reveal">
+            <p class="feature-glyph actions" aria-label="GitHub Actions 성공">✓ CI</p>
+            <h3>Actions 결과까지</h3>
+            <p>커밋마다 실행 상태를 확인하고, 워크플로와 Job 결과로 바로 이동합니다.</p>
+          </article>
+          <article class="feature reveal">
             <p class="feature-glyph orange" aria-hidden="true">⌘ R</p>
             <h3>rebase pull과 push</h3>
             <p>브랜치 메뉴에서 동기화하고 단축키로 모든 원격 변경을 가져옵니다.</p>
@@ -126,7 +131,7 @@
             <p class="eyebrow">Signal over noise</p>
             <h2 id="signals-title">그래프 안에서<br />지금 상태까지.</h2>
             <p>
-              현재 위치와 작업 중인 파일을 타임라인 안에 표시해, 다음 행동을 판단하는 데 필요한 맥락을 놓치지 않습니다.
+              현재 위치와 작업 중인 파일, Actions 결과를 타임라인 안에 표시해 다음 행동에 필요한 맥락을 놓치지 않습니다.
             </p>
           </div>
           <dl class="signal-list">
@@ -142,13 +147,17 @@
               <dt><i class="dot orange-dot" aria-hidden="true"></i>뒤처진 변경</dt>
               <dd>가져올 커밋을 주황색으로</dd>
             </div>
+            <div class="reveal">
+              <dt><i class="dot cyan-dot" aria-hidden="true"></i>Actions 상태</dt>
+              <dd>실행 중, 성공, 실패를 커밋 옆에</dd>
+            </div>
           </dl>
         </div>
 
         <figure class="detail-shot reveal">
           <img
             src="assets/gitscope-detail.webp"
-            alt="Lathe 저장소의 HEAD, 브랜치, 태그와 upstream 차이가 표시된 커밋 그래프"
+            alt="Lathe 저장소의 HEAD, 브랜치, 태그, upstream 차이와 GitHub Actions 성공 상태가 표시된 커밋 그래프"
             width="3000"
             height="900"
             loading="lazy"

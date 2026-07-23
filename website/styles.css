@@ -439,7 +439,7 @@ h1 span:nth-child(2) {
 
 .workflow-grid {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   margin-top: clamp(60px, 7vw, 96px);
   border-top: 1px solid rgba(255, 255, 255, 0.16);
   border-bottom: 1px solid rgba(255, 255, 255, 0.16);
@@ -481,6 +481,10 @@ h1 span:nth-child(2) {
 
 .feature-glyph.orange {
   color: var(--orange);
+}
+
+.feature-glyph.actions {
+  color: var(--green);
 }
 
 .feature-glyph.split {
