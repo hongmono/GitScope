@@ -1,0 +1,4 @@
+interface:
+  display_name: "GitScope Release"
+  short_description: "Commit, document, and deploy GitScope safely"
+  default_prompt: "Use $gitscope-release to update release notes, split and commit GitScope changes, push main, and deploy."
