@@ -22,12 +22,14 @@
 		80D35D89D0EF0FC3CAFD417B /* GitRepositoryLoader.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7BEFE28658B6A189A7536C6B /* GitRepositoryLoader.swift */; };
 		AAEF583B78C2939544BE9AC4 /* GitScopeApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = EA58D5EBA85D662E097AB1C6 /* GitScopeApp.swift */; };
 		ADAE94454A41F7C4160599B8 /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = 96C4C1B5A01B726096364581 /* Sparkle */; };
+		E334417A82FDBDA47032A2F6 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 5C5FE89191316C39B07688EB /* Assets.xcassets */; };
 		EA299277B3D9C9BBA45BF058 /* GitModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = ED42056A8FAFA02AA5C07D8E /* GitModels.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
 		1C001F70A468C6646A4C8463 /* HistoryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HistoryView.swift; sourceTree = "<group>"; };
 		31C7F2C30AD4190D53D70B74 /* BranchSidebarView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BranchSidebarView.swift; sourceTree = "<group>"; };
+		5C5FE89191316C39B07688EB /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		5CA634BB9E0D6C8820721106 /* CommitDetailsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CommitDetailsView.swift; sourceTree = "<group>"; };
 		619F77FCFE6629986EB376AC /* GitHubActionsService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GitHubActionsService.swift; sourceTree = "<group>"; };
 		68DB1724FBCA7D6EA51036BF /* AppModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppModel.swift; sourceTree = "<group>"; };
@@ -77,6 +79,7 @@
 		3EFEBA9ADB96F725F8C19793 /* GitScopeApp */ = {
 			isa = PBXGroup;
 			children = (
+				5C5FE89191316C39B07688EB /* Assets.xcassets */,
 				9905B1D4230AB27EBA2CBC0E /* Info.plist */,
 				083418B0C76753F373E3F4EF /* App */,
 				DAEA215EE5B4CB5042E8083F /* Models */,
@@ -136,6 +139,7 @@
 			buildConfigurationList = B474A8897DA3EEE8FE15BFDA /* Build configuration list for PBXNativeTarget "GitScope" */;
 			buildPhases = (
 				329A1493BB4FE451FBFCA11C /* Sources */,
+				80B5CB151F27180FA137551D /* Resources */,
 				0B15C4627611C95692691ABE /* Frameworks */,
 			);
 			buildRules = (
@@ -185,6 +189,17 @@
 			);
 		};
 /* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		80B5CB151F27180FA137551D /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				E334417A82FDBDA47032A2F6 /* Assets.xcassets in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
 		329A1493BB4FE451FBFCA11C /* Sources */ = {
