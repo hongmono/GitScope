@@ -26,6 +26,8 @@ enum GitHubActionsServiceError: LocalizedError {
 }
 
 actor GitHubActionsService {
+    static let shared = GitHubActionsService()
+
     private struct WorkflowRunsEnvelope: Decodable {
         let workflowRuns: [WorkflowRunResponse]
 
@@ -204,7 +206,16 @@ actor GitHubActionsService {
         commitSHA: String
     ) async throws -> [GitHubCheckRun] {
         guard let githubRepository = repository.githubRepository else { return [] }
+        return try await loadCheckRuns(
+            repository: githubRepository,
+            commitSHA: commitSHA
+        )
+    }
 
+    func loadCheckRuns(
+        repository githubRepository: GitHubRepository,
+        commitSHA: String
+    ) async throws -> [GitHubCheckRun] {
         var components = URLComponents(
             url: githubRepository.apiURL
                 .appending(path: "commits")

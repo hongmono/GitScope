@@ -765,14 +765,23 @@ private struct VirtualizedHistoryRow: View {
             columnDivider
             CommitMessageHistoryCell(
                 commit: row.commit,
-                isSelected: isSelected,
-                githubActionsSummary: githubActionsSummary
+                isSelected: isSelected
             )
-                .padding(.horizontal, 8)
+                .padding(.leading, 8)
+                .padding(.trailing, githubActionsSummary == nil ? 8 : 28)
                 .frame(
                     minWidth: HistoryColumnMetrics.minimumCommitWidth,
                     maxWidth: .infinity
                 )
+                .overlay(alignment: .trailing) {
+                    if let githubActionsSummary {
+                        GitHubActionsHistoryBadge(
+                            summary: githubActionsSummary,
+                            isSelected: isSelected
+                        )
+                        .padding(.trailing, 8)
+                    }
+                }
             if visibility.showsAuthor {
                 columnDivider
                 Text(row.commit.authorName)
@@ -847,7 +856,6 @@ private struct RepositoryHistoryCell: View {
 private struct CommitMessageHistoryCell: View {
     let commit: GitCommit
     let isSelected: Bool
-    let githubActionsSummary: GitHubActionsSummary?
 
     var body: some View {
         HStack(spacing: 6) {
@@ -882,85 +890,67 @@ private struct CommitMessageHistoryCell: View {
                 Text("+\(commit.references.count - 3)")
                     .foregroundStyle(.secondary)
             }
-
-            if let githubActionsSummary {
-                Spacer(minLength: 8)
-                GitHubActionsHistoryBadge(
-                    summary: githubActionsSummary,
-                    isSelected: isSelected
-                )
-            }
         }
-        .font(.system(size: 11))
         .frame(maxWidth: .infinity, alignment: .leading)
+        .font(.system(size: 11))
+        .clipped()
     }
 }
 
 private struct GitHubActionsHistoryBadge: View {
     let summary: GitHubActionsSummary
     let isSelected: Bool
+    @State private var isShowingRuns = false
+    @State private var checks: [GitHubCheckRun] = []
+    @State private var isLoadingChecks = false
 
     var body: some View {
         Button {
-            if let url = summary.primaryURL {
-                NSWorkspace.shared.open(url)
-            }
+            isShowingRuns.toggle()
         } label: {
-            HStack(spacing: 3) {
-                Image(systemName: systemImage)
-                Text(title)
-                    .lineLimit(1)
-            }
-            .font(.system(size: 9, weight: .semibold))
-            .foregroundStyle(isSelected ? Color.primary : color)
-            .padding(.horizontal, 5)
-            .padding(.vertical, 2)
-            .background(
-                Capsule()
-                    .fill(color.opacity(isSelected ? 0.22 : 0.12))
-            )
-            .overlay(
-                Capsule()
-                    .stroke(color.opacity(0.45), lineWidth: 0.5)
-            )
+            Image(systemName: GitHubActionsLabels.systemImage(for: summary.state))
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(
+                    isSelected
+                        ? Color.primary
+                        : GitHubActionsLabels.color(for: summary.state)
+                )
+                .frame(width: 18, height: 18)
+                .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .fixedSize()
         .help(helpText)
-        .accessibilityLabel("GitHub Actions \(title)")
-    }
-
-    private var title: String {
-        switch summary.state {
-        case .queued: return "대기 중"
-        case .inProgress: return "실행 중"
-        case .success: return "성공"
-        case .failure: return "실패"
-        case .cancelled: return "취소됨"
-        case .neutral: return "건너뜀"
-        case .unknown: return "확인 필요"
+        .accessibilityLabel(
+            "GitHub Actions \(GitHubActionsLabels.title(for: summary.state)), "
+                + "\(summary.runs.count)개 워크플로"
+        )
+        .onContinuousHover { phase in
+            switch phase {
+            case .active:
+                NSCursor.pointingHand.set()
+            case .ended:
+                NSCursor.arrow.set()
+            }
         }
-    }
-
-    private var systemImage: String {
-        switch summary.state {
-        case .queued: return "clock.fill"
-        case .inProgress: return "arrow.triangle.2.circlepath"
-        case .success: return "checkmark.circle.fill"
-        case .failure: return "xmark.octagon.fill"
-        case .cancelled: return "slash.circle.fill"
-        case .neutral: return "minus.circle.fill"
-        case .unknown: return "questionmark.circle.fill"
+        .popover(isPresented: $isShowingRuns, arrowEdge: .trailing) {
+            GitHubActionsRunsPopover(
+                summary: summary,
+                checks: checks,
+                isLoadingChecks: isLoadingChecks
+            )
         }
-    }
-
-    private var color: Color {
-        switch summary.state {
-        case .queued: return .orange
-        case .inProgress: return .blue
-        case .success: return .green
-        case .failure: return .red
-        case .cancelled, .neutral, .unknown: return .secondary
+        .task(id: isShowingRuns) {
+            guard isShowingRuns, checks.isEmpty else { return }
+            isLoadingChecks = true
+            do {
+                checks = try await GitHubActionsService.shared.loadCheckRuns(
+                    repository: summary.repository,
+                    commitSHA: summary.commitID.oid
+                )
+            } catch {
+                checks = []
+            }
+            isLoadingChecks = false
         }
     }
 
@@ -970,6 +960,172 @@ private struct GitHubActionsHistoryBadge: View {
         }
         return (["GitHub Actions · \(summary.runs.count)개 워크플로"] + workflows)
             .joined(separator: "\n")
+    }
+}
+
+private struct GitHubActionsRunsPopover: View {
+    let summary: GitHubActionsSummary
+    let checks: [GitHubCheckRun]
+    let isLoadingChecks: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 7) {
+                Image(systemName: "bolt.horizontal.circle")
+                    .foregroundStyle(.secondary)
+                Text("GitHub Actions")
+                    .font(.system(size: 12, weight: .semibold))
+                Spacer(minLength: 12)
+                Text("\(summary.runs.count)개 워크플로")
+                    .font(.system(size: 10))
+                    .foregroundStyle(.secondary)
+            }
+
+            Divider()
+
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 4) {
+                    Text("워크플로")
+                        .font(.system(size: 9, weight: .medium))
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 8)
+
+                    ForEach(summary.runs) { run in
+                        GitHubActionsStatusLink(
+                            title: run.name,
+                            detail: runDetail(run),
+                            state: run.state,
+                            webURL: run.webURL
+                        )
+                    }
+
+                    if isLoadingChecks || !checks.isEmpty {
+                        Divider()
+                            .padding(.vertical, 4)
+
+                        Text("Jobs 및 Checks")
+                            .font(.system(size: 9, weight: .medium))
+                            .foregroundStyle(.secondary)
+                            .padding(.horizontal, 8)
+
+                        if isLoadingChecks {
+                            HStack(spacing: 7) {
+                                ProgressView()
+                                    .controlSize(.mini)
+                                Text("상태를 불러오는 중…")
+                                    .font(.system(size: 10))
+                                    .foregroundStyle(.secondary)
+                            }
+                            .frame(minHeight: 38)
+                            .padding(.horizontal, 8)
+                        } else {
+                            ForEach(checks) { check in
+                                GitHubActionsStatusLink(
+                                    title: check.name,
+                                    detail: check.appName,
+                                    state: check.state,
+                                    webURL: check.webURL
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+            .frame(
+                height: min(
+                    max(CGFloat(visibleRowCount) * 42 + 20, 62),
+                    314
+                )
+            )
+        }
+        .padding(12)
+        .frame(width: 340)
+    }
+
+    private var visibleRowCount: Int {
+        summary.runs.count + max(checks.count, isLoadingChecks ? 1 : 0)
+    }
+
+    private func runDetail(_ run: GitHubWorkflowRun) -> String {
+        var parts = ["#\(run.runNumber)"]
+        if let branch = run.headBranch, !branch.isEmpty {
+            parts.append(branch)
+        }
+        if !run.event.isEmpty {
+            parts.append(run.event)
+        }
+        return parts.joined(separator: " · ")
+    }
+}
+
+private struct GitHubActionsStatusLink: View {
+    let title: String
+    let detail: String?
+    let state: GitHubActionsState
+    let webURL: URL?
+    @State private var isHovered = false
+
+    var body: some View {
+        Button {
+            if let webURL {
+                NSWorkspace.shared.open(webURL)
+            }
+        } label: {
+            HStack(spacing: 8) {
+                Image(systemName: GitHubActionsLabels.systemImage(for: state))
+                    .foregroundStyle(GitHubActionsLabels.color(for: state))
+                    .frame(width: 14)
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title)
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+                    if let detail, !detail.isEmpty {
+                        Text(detail)
+                            .font(.system(size: 9))
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
+                }
+
+                Spacer(minLength: 8)
+
+                Text(GitHubActionsLabels.title(for: state))
+                    .font(.system(size: 9, weight: .medium))
+                    .foregroundStyle(GitHubActionsLabels.color(for: state))
+
+                if webURL != nil {
+                    Image(systemName: "arrow.up.right.square")
+                        .font(.system(size: 9))
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .padding(.horizontal, 8)
+            .frame(maxWidth: .infinity, minHeight: 38, alignment: .leading)
+            .background(
+                RoundedRectangle(cornerRadius: 6)
+                    .fill(isHovered ? Color.accentColor.opacity(0.11) : .clear)
+            )
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(webURL == nil)
+        .help(webURL == nil ? "" : "\(title) 실행을 GitHub에서 열기")
+        .accessibilityLabel(
+            "\(title), \(GitHubActionsLabels.title(for: state))"
+                + (webURL == nil ? "" : ", GitHub에서 열기")
+        )
+        .onContinuousHover { phase in
+            switch phase {
+            case .active where webURL != nil:
+                isHovered = true
+                NSCursor.pointingHand.set()
+            case .active, .ended:
+                isHovered = false
+                NSCursor.arrow.set()
+            }
+        }
     }
 }
 

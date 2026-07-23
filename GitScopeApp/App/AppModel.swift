@@ -46,7 +46,7 @@ final class AppModel: ObservableObject {
 
     private let loader = GitRepositoryLoader()
     private let remoteService = GitRemoteService()
-    private let githubActionsService = GitHubActionsService()
+    private let githubActionsService = GitHubActionsService.shared
     private var allCommits: [GitCommit] = []
     private var branchMembership: Set<CommitID>?
     private var workspaceTask: Task<Void, Never>?

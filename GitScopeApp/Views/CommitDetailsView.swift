@@ -264,6 +264,14 @@ private struct GitHubActionsDetailsSection: View {
                     }
                     .buttonStyle(.link)
                     .font(.system(size: 10))
+                    .onContinuousHover { phase in
+                        switch phase {
+                        case .active:
+                            NSCursor.pointingHand.set()
+                        case .ended:
+                            NSCursor.arrow.set()
+                        }
+                    }
                 }
             }
 
@@ -359,6 +367,14 @@ private struct GitHubActionsResultRow: View {
         }
         .buttonStyle(.plain)
         .disabled(webURL == nil)
+        .onContinuousHover { phase in
+            switch phase {
+            case .active where webURL != nil:
+                NSCursor.pointingHand.set()
+            case .active, .ended:
+                NSCursor.arrow.set()
+            }
+        }
     }
 }
 
