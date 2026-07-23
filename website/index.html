@@ -7,8 +7,8 @@
       name="description"
       content="GitScope는 여러 저장소의 커밋, 브랜치, 작업 상태를 한 화면에서 읽고 안전하게 동기화하는 macOS Git 이력 뷰어입니다."
     />
-    <meta name="theme-color" content="#0b0e10" media="(prefers-color-scheme: dark)" />
-    <meta name="theme-color" content="#f5f5f1" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#f4f3ee" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#0c1011" media="(prefers-color-scheme: dark)" />
     <meta property="og:type" content="website" />
     <meta property="og:locale" content="ko_KR" />
     <meta property="og:title" content="GitScope | Git history, in focus" />
@@ -28,183 +28,157 @@
   <body>
     <a class="skip-link" href="#main">본문으로 건너뛰기</a>
 
-    <header class="site-header" data-header>
+    <header class="site-header">
       <a class="brand" href="#top" aria-label="GitScope 홈">
         <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span>
-        <span>GitScope</span>
+        <span translate="no">GitScope</span>
       </a>
       <nav class="site-nav" aria-label="주요 메뉴">
-        <a href="#workflow">워크플로</a>
-        <a href="#principles">설계 원칙</a>
+        <a href="#workflow">기능</a>
+        <a href="#signals">그래프</a>
         <a href="https://github.com/hongmono/GitScope">GitHub</a>
       </nav>
       <a class="header-download" href="https://github.com/hongmono/GitScope/releases/latest">
-        최신 버전
+        DMG 받기
+        <span aria-hidden="true">↘</span>
       </a>
     </header>
 
     <main id="main">
-      <section class="hero" id="top" data-hero>
-        <img
-          class="hero-field"
-          src="assets/commit-field.webp"
-          alt=""
-          width="1680"
-          height="945"
-          fetchpriority="high"
-        />
-        <div class="hero-copy">
-          <p class="eyebrow reveal">macOS용 Git 이력 뷰어</p>
-          <h1 class="reveal">브랜치를 읽는 데 드는 시간을 줄이세요.</h1>
-          <p class="hero-summary reveal">
-            여러 저장소의 커밋, 브랜치, 작업 상태를 한 화면에서 읽고 안전하게 동기화하세요.
-          </p>
-          <div class="hero-actions reveal">
-            <a class="button button-primary" href="https://github.com/hongmono/GitScope/releases/latest">
-              최신 DMG 받기
-              <span aria-hidden="true">↘</span>
-            </a>
-            <a class="button button-secondary" href="https://github.com/hongmono/GitScope">
-              소스 보기
-            </a>
+      <section class="hero" id="top">
+        <div class="hero-intro">
+          <div>
+            <p class="eyebrow reveal">Git history, in focus.</p>
+            <h1>
+              <span>브랜치를 읽는</span>
+              <span class="accent-text">가장 선명한 시야.</span>
+            </h1>
+          </div>
+          <div class="hero-side reveal">
+            <p>
+              여러 저장소의 커밋과 작업 상태를 한 화면에서 읽고, 필요한 순간에만 안전하게 동기화하세요.
+            </p>
+            <div class="hero-actions">
+              <a class="button button-dark" href="https://github.com/hongmono/GitScope/releases/latest">
+                최신 DMG 받기
+                <span aria-hidden="true">↘</span>
+              </a>
+              <a class="text-link" href="https://github.com/hongmono/GitScope">
+                소스 보기
+                <span aria-hidden="true">→</span>
+              </a>
+            </div>
           </div>
         </div>
 
-        <figure class="product-frame reveal">
-          <div class="product-bar" aria-hidden="true">
-            <span></span><span></span><span></span>
-            <b>GitScope</b>
-          </div>
+        <figure class="product-shot reveal">
+          <div class="shot-halo" aria-hidden="true"></div>
           <img
             src="assets/gitscope-window.webp"
-            alt="GitScope에서 GitScope 저장소의 브랜치, 커밋 그래프, 변경 파일을 확인하는 화면"
-            width="3000"
-            height="1687"
+            alt="GitScope에서 Lathe 저장소의 브랜치와 약 10개의 커밋 그래프를 확인하는 화면"
+            width="4160"
+            height="900"
+            fetchpriority="high"
           />
+          <figcaption>
+            <span><i class="live-dot" aria-hidden="true"></i> Lathe 저장소</span>
+            <span>실제 GitScope Dev 화면</span>
+          </figcaption>
         </figure>
 
-        <div class="hero-proof reveal" aria-label="제품 정보">
-          <span>Apple Silicon</span>
-          <span>macOS 14+</span>
-          <span>공증 완료</span>
-          <span>Sparkle 업데이트</span>
-        </div>
-      </section>
-
-      <section class="manifesto reveal" aria-labelledby="manifesto-title">
-        <p class="section-index">01 / FOCUS</p>
-        <h2 id="manifesto-title">
-          흩어진 Git 상태를<br />
-          <span>하나의 시야로.</span>
-        </h2>
-        <p>
-          탭을 오가며 명령어를 반복하기 전에, 여러 저장소의 흐름과 현재 위치를 한 번에 파악할 수 있습니다.
-        </p>
+        <ul class="hero-facts" aria-label="지원 환경">
+          <li>Apple Silicon</li>
+          <li>macOS 14 이상</li>
+          <li>Sparkle 자동 업데이트</li>
+        </ul>
       </section>
 
       <section class="workflow" id="workflow" aria-labelledby="workflow-title">
-        <div class="workflow-intro reveal">
-          <p class="section-index">02 / WORKFLOW</p>
-          <h2 id="workflow-title">평소 쓰던 Git 흐름 그대로.</h2>
-          <p>읽고, 판단하고, 필요한 순간에만 동기화합니다.</p>
+        <div class="section-heading reveal">
+          <p class="eyebrow">평소 쓰던 Git 흐름 그대로</p>
+          <h2 id="workflow-title">읽고, 이동하고,<br />필요할 때 동기화.</h2>
         </div>
 
-        <div class="workflow-steps">
-          <article class="workflow-step reveal">
-            <div class="step-number">01</div>
-            <div>
-              <p class="step-kicker">OPEN</p>
-              <h3>저장소는 여러 개, 맥락은 하나</h3>
-              <p>
-                저장소별 탭을 열고 <kbd>⌘1</kbd>부터 <kbd>⌘9</kbd>까지 즉시 이동하세요. 종료한 뒤에도 탭이 복원되고, 비활성 로그는 메모리에서 내려갑니다.
-              </p>
-            </div>
+        <div class="workflow-grid">
+          <article class="feature reveal">
+            <p class="feature-glyph cyan" aria-hidden="true">⌘ 1-9</p>
+            <h3>여러 저장소를 탭으로</h3>
+            <p>저장소 사이를 즉시 이동하고, 재시작해도 열어 둔 탭을 그대로 복원합니다.</p>
           </article>
-
-          <article class="workflow-step reveal">
-            <div class="step-number">02</div>
-            <div>
-              <p class="step-kicker">READ</p>
-              <h3>HEAD와 작업 상태를 그래프 안에서</h3>
-              <p>
-                현재 위치, 브랜치, 태그, 커밋되지 않은 파일을 같은 타임라인에서 봅니다. upstream과의 ahead, behind 차이도 색으로 구분됩니다.
-              </p>
-            </div>
+          <article class="feature reveal">
+            <p class="feature-glyph split" aria-label="upstream보다 0개 앞서고 30개 뒤처짐">
+              <span>↑0</span><span>↓30</span>
+            </p>
+            <h3>upstream 차이를 색으로</h3>
+            <p>HEAD, 브랜치, 태그와 앞선 커밋, 뒤처진 커밋을 한 흐름에서 봅니다.</p>
           </article>
-
-          <article class="workflow-step reveal">
-            <div class="step-number">03</div>
-            <div>
-              <p class="step-kicker">SYNC</p>
-              <h3>rebase pull과 push를 바로</h3>
-              <p>
-                브랜치를 우클릭해 현재 브랜치를 rebase pull하거나 upstream으로 push하세요. <kbd>⌘R</kbd>은 모든 저장소에서 fetch를 실행합니다.
-              </p>
-            </div>
+          <article class="feature reveal">
+            <p class="feature-glyph orange" aria-hidden="true">⌘ R</p>
+            <h3>rebase pull과 push</h3>
+            <p>브랜치 메뉴에서 동기화하고 단축키로 모든 원격 변경을 가져옵니다.</p>
           </article>
         </div>
       </section>
 
-      <section class="detail" aria-labelledby="detail-title">
-        <div class="detail-visual reveal">
-          <img
-            src="assets/gitscope-detail.webp"
-            alt="GitScope의 브랜치 목록과 커밋 타임라인 확대 화면"
-            width="2400"
-            height="800"
-            loading="lazy"
-          />
-        </div>
-        <div class="detail-copy reveal">
-          <p class="section-index">03 / SIGNAL</p>
-          <h2 id="detail-title">필요한 신호만 남겼습니다.</h2>
-          <dl>
-            <div>
-              <dt>작업 중</dt>
-              <dd>커밋되지 않은 파일을 그래프 최상단의 현재 작업으로 표시합니다.</dd>
+      <section class="signals" id="signals" aria-labelledby="signals-title">
+        <div class="signals-copy">
+          <div class="section-heading reveal">
+            <p class="eyebrow">Signal over noise</p>
+            <h2 id="signals-title">그래프 안에서<br />지금 상태까지.</h2>
+            <p>
+              현재 위치와 작업 중인 파일을 타임라인 안에 표시해, 다음 행동을 판단하는 데 필요한 맥락을 놓치지 않습니다.
+            </p>
+          </div>
+          <dl class="signal-list">
+            <div class="reveal">
+              <dt><i class="dot cyan-dot" aria-hidden="true"></i>현재 위치</dt>
+              <dd>HEAD와 연결된 브랜치, 태그</dd>
             </div>
-            <div>
-              <dt>현재 위치</dt>
-              <dd>HEAD와 연결된 브랜치, 태그를 커밋 옆에서 바로 확인합니다.</dd>
+            <div class="reveal">
+              <dt><i class="dot green-dot" aria-hidden="true"></i>앞선 변경</dt>
+              <dd>push할 커밋을 초록색으로</dd>
             </div>
-            <div>
-              <dt>원격 차이</dt>
-              <dd>upstream보다 앞선 커밋과 뒤처진 커밋을 서로 다른 색으로 읽습니다.</dd>
+            <div class="reveal">
+              <dt><i class="dot orange-dot" aria-hidden="true"></i>뒤처진 변경</dt>
+              <dd>가져올 커밋을 주황색으로</dd>
             </div>
           </dl>
         </div>
-      </section>
 
-      <section class="principles" id="principles" aria-labelledby="principles-title">
-        <div class="principles-copy reveal">
-          <p class="section-index">04 / GUARDRAILS</p>
-          <h2 id="principles-title">Git을 바꾸기 전에,<br />Git을 읽는 도구.</h2>
-        </div>
-        <div class="principles-note reveal">
-          <p>
-            GitScope는 이력을 이해하고 현재 브랜치를 안전하게 동기화하는 데 집중합니다.
-          </p>
-          <div class="scope-line">
-            <span>포함</span>
-            <strong>fetch · pull --rebase · push</strong>
-          </div>
-          <div class="scope-line muted">
-            <span>미포함</span>
-            <strong>commit · checkout · merge · force push</strong>
-          </div>
-        </div>
+        <figure class="detail-shot reveal">
+          <img
+            src="assets/gitscope-detail.webp"
+            alt="Lathe 저장소의 HEAD, 브랜치, 태그와 upstream 차이가 표시된 커밋 그래프"
+            width="3000"
+            height="900"
+            loading="lazy"
+          />
+          <figcaption>Lathe · 119 commits</figcaption>
+        </figure>
       </section>
 
       <section class="download" aria-labelledby="download-title">
-        <img class="download-field" src="assets/commit-field.webp" alt="" />
+        <div class="download-branch" aria-hidden="true">
+          <i></i><i></i><i></i><i></i><i></i>
+        </div>
         <div class="download-copy reveal">
-          <p class="section-index">05 / START</p>
-          <h2 id="download-title">그래프를 더 선명하게<br />읽을 준비가 되셨나요?</h2>
+          <p class="eyebrow">Built for macOS</p>
+          <h2 id="download-title">Git을 바꾸기 전에,<br />Git을 읽는 도구.</h2>
           <p>Apple Silicon과 macOS 14 이상에서 사용할 수 있습니다.</p>
-          <a class="button button-primary" href="https://github.com/hongmono/GitScope/releases/latest">
+          <a class="button button-dark" href="https://github.com/hongmono/GitScope/releases/latest">
             GitScope 다운로드
             <span aria-hidden="true">↘</span>
           </a>
+        </div>
+        <div class="scope reveal">
+          <div>
+            <span>지원</span>
+            <strong translate="no">fetch · pull --rebase · push</strong>
+          </div>
+          <div>
+            <span>업데이트</span>
+            <strong translate="no">Sparkle</strong>
+          </div>
         </div>
       </section>
     </main>
@@ -212,7 +186,7 @@
     <footer class="site-footer">
       <a class="brand footer-brand" href="#top">
         <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span>
-        <span>GitScope</span>
+        <span translate="no">GitScope</span>
       </a>
       <p>Git history, in focus.</p>
       <div>
