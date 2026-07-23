@@ -157,24 +157,54 @@ jobs:
             CURRENT_PROJECT_VERSION="$GITHUB_RUN_NUMBER" \
             build
 
-          info_plist="$APP_PATH/Contents/Info.plist"
-          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$info_plist")" = "$VERSION"
-          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$info_plist")" = "$GITHUB_RUN_NUMBER"
-          test -n "$(/usr/libexec/PlistBuddy -c 'Print :SUPublicEDKey' "$info_plist")"
-          codesign --verify --deep --strict --verbose=2 "$APP_PATH"
-
           sparkle_framework="$APP_PATH/Contents/Frameworks/Sparkle.framework/Versions/Current"
-          signed_items=(
-            "$APP_PATH"
-            "$sparkle_framework"
+          sparkle_nested_items=(
             "$sparkle_framework/Autoupdate"
             "$sparkle_framework/Updater.app"
             "$sparkle_framework/XPCServices/Downloader.xpc"
             "$sparkle_framework/XPCServices/Installer.xpc"
           )
 
+          for signed_item in "${sparkle_nested_items[@]}"; do
+            codesign \
+              --force \
+              --options runtime \
+              --timestamp \
+              --sign "$APPLE_SIGNING_IDENTITY" \
+              --preserve-metadata=identifier,entitlements \
+              "$signed_item"
+          done
+
+          codesign \
+            --force \
+            --options runtime \
+            --timestamp \
+            --sign "$APPLE_SIGNING_IDENTITY" \
+            --preserve-metadata=identifier,entitlements \
+            "$sparkle_framework"
+          codesign \
+            --force \
+            --options runtime \
+            --timestamp \
+            --sign "$APPLE_SIGNING_IDENTITY" \
+            --preserve-metadata=identifier,entitlements \
+            "$APP_PATH"
+
+          info_plist="$APP_PATH/Contents/Info.plist"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$info_plist")" = "$VERSION"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$info_plist")" = "$GITHUB_RUN_NUMBER"
+          test -n "$(/usr/libexec/PlistBuddy -c 'Print :SUPublicEDKey' "$info_plist")"
+          codesign --verify --deep --strict --verbose=2 "$APP_PATH"
+
+          signed_items=(
+            "$APP_PATH"
+            "$sparkle_framework"
+            "${sparkle_nested_items[@]}"
+          )
+
           for signed_item in "${signed_items[@]}"; do
-            codesign -dvv "$signed_item" 2>&1 | grep -q '^Timestamp='
+            echo "Verifying secure timestamp: $signed_item"
+            codesign -dvv "$signed_item" 2>&1 | tee /dev/stderr | grep -q '^Timestamp='
           done
 
       - name: Notarize app
