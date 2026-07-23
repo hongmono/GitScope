@@ -368,7 +368,7 @@ jobs:
           test -s "$appcast"
           grep -q 'sparkle:edSignature=' "$appcast"
           grep -q 'sparkle-signatures:' "$appcast"
-          grep -q '<description>' "$appcast"
+          grep -Eq '<description([[:space:]>])' "$appcast"
           cp "$appcast" "$ARTIFACT_DIR/appcast.xml"
           echo "RELEASE_APPCAST=$ARTIFACT_DIR/appcast.xml" >> "$GITHUB_ENV"
 
