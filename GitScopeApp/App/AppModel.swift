@@ -15,6 +15,10 @@ final class AppModel: ObservableObject {
     @Published private(set) var selectedDetails: CommitDetails?
     @Published private(set) var selectedFile: ChangedFile?
     @Published private(set) var selectedPatch: String?
+    @Published private(set) var githubActionsByCommit: [CommitID: GitHubActionsSummary] = [:]
+    @Published private(set) var selectedGitHubChecks: [GitHubCheckRun] = []
+    @Published private(set) var isLoadingSelectedGitHubChecks = false
+    @Published private(set) var githubActionsNotice: String?
     @Published private(set) var isLoadingWorkspace = false
     @Published private(set) var isLoadingReference = false
     @Published private(set) var isLoadingDetails = false
@@ -42,6 +46,7 @@ final class AppModel: ObservableObject {
 
     private let loader = GitRepositoryLoader()
     private let remoteService = GitRemoteService()
+    private let githubActionsService = GitHubActionsService()
     private var allCommits: [GitCommit] = []
     private var branchMembership: Set<CommitID>?
     private var workspaceTask: Task<Void, Never>?
@@ -50,6 +55,10 @@ final class AppModel: ObservableObject {
     private var patchTask: Task<Void, Never>?
     private var queryTask: Task<Void, Never>?
     private var remoteTask: Task<Void, Never>?
+    private var githubActionsMonitorTask: Task<Void, Never>?
+    private var selectedGitHubChecksTask: Task<Void, Never>?
+    private var githubActionsFastPollUntil: Date?
+    private var selectedGitHubChecksCommitID: CommitID?
     private var hasRestoredWorkspace = false
     private static let workspaceTabsDefaultsKey = "workspaceTabs.v1"
     private static let activeWorkspaceTabDefaultsKey = "activeWorkspaceTabID.v1"
@@ -254,6 +263,11 @@ final class AppModel: ObservableObject {
         }
     }
 
+    func refreshGitHubActions() {
+        githubActionsFastPollUntil = .now.addingTimeInterval(30)
+        startGitHubActionsMonitoring(reloadAuthentication: true)
+    }
+
     func applyPathFilter() {
         refresh()
     }
@@ -418,6 +432,7 @@ final class AppModel: ObservableObject {
         detailsTask?.cancel()
         patchTask?.cancel()
         isLoadingPatch = false
+        loadSelectedGitHubChecks(for: commit)
 
         guard let repository = repositories.first(where: { $0.id == commit.id.repositoryID }) else { return }
         isLoadingDetails = true
@@ -480,8 +495,13 @@ final class AppModel: ObservableObject {
         selectedPatch = nil
         detailsTask?.cancel()
         patchTask?.cancel()
+        selectedGitHubChecksTask?.cancel()
+        selectedGitHubChecksTask = nil
+        selectedGitHubChecks.removeAll(keepingCapacity: false)
+        selectedGitHubChecksCommitID = nil
         isLoadingDetails = false
         isLoadingPatch = false
+        isLoadingSelectedGitHubChecks = false
     }
 
     private var normalizedPathFilter: String? {
@@ -513,6 +533,7 @@ final class AppModel: ObservableObject {
         errorMessage = nil
         remoteTask = Task {
             var failures: [String] = []
+            var completedPush = false
             for (repository, reference) in targets {
                 do {
                     switch kind {
@@ -528,6 +549,7 @@ final class AppModel: ObservableObject {
                             repository: repository,
                             reference: reference
                         )
+                        completedPush = true
                     }
                 } catch {
                     failures.append(
@@ -538,6 +560,9 @@ final class AppModel: ObservableObject {
             guard remoteOperation == operation else { return }
             remoteOperation = nil
             remoteTask = nil
+            if completedPush {
+                githubActionsFastPollUntil = .now.addingTimeInterval(60)
+            }
             refresh()
             if !failures.isEmpty {
                 errorMessage = failures.joined(separator: "\n\n")
@@ -559,6 +584,8 @@ final class AppModel: ObservableObject {
 
         isLoadingWorkspace = true
         errorMessage = nil
+        githubActionsMonitorTask?.cancel()
+        githubActionsMonitorTask = nil
         clearSelection()
         workspaceTask?.cancel()
         referenceTask?.cancel()
@@ -585,6 +612,7 @@ final class AppModel: ObservableObject {
                 isCurrentBranchesSelected = false
                 branchMembership = nil
                 rebuildRows()
+                startGitHubActionsMonitoring()
             } catch {
                 guard !Task.isCancelled else { return }
                 errorMessage = error.localizedDescription
@@ -631,11 +659,15 @@ final class AppModel: ObservableObject {
         detailsTask?.cancel()
         patchTask?.cancel()
         queryTask?.cancel()
+        githubActionsMonitorTask?.cancel()
+        selectedGitHubChecksTask?.cancel()
         workspaceTask = nil
         referenceTask = nil
         detailsTask = nil
         patchTask = nil
         queryTask = nil
+        githubActionsMonitorTask = nil
+        selectedGitHubChecksTask = nil
 
         workspaceURLs.removeAll(keepingCapacity: false)
         repositories.removeAll(keepingCapacity: false)
@@ -643,6 +675,9 @@ final class AppModel: ObservableObject {
         visibleRepositoryIDs.removeAll(keepingCapacity: false)
         rows.removeAll(keepingCapacity: false)
         allCommits.removeAll(keepingCapacity: false)
+        githubActionsByCommit.removeAll(keepingCapacity: false)
+        selectedGitHubChecks.removeAll(keepingCapacity: false)
+        selectedGitHubChecksCommitID = nil
         branchMembership = nil
         selectedCommit = nil
         selectedDetails = nil
@@ -657,7 +692,10 @@ final class AppModel: ObservableObject {
         isLoadingReference = false
         isLoadingDetails = false
         isLoadingPatch = false
+        isLoadingSelectedGitHubChecks = false
         errorMessage = nil
+        githubActionsNotice = nil
+        githubActionsFastPollUntil = nil
 
         query = ""
         branchSearch = ""
@@ -732,6 +770,140 @@ final class AppModel: ObservableObject {
             try? await Task.sleep(for: .milliseconds(150))
             guard !Task.isCancelled else { return }
             rebuildRows()
+        }
+    }
+
+    private func startGitHubActionsMonitoring(
+        reloadAuthentication: Bool = false
+    ) {
+        githubActionsMonitorTask?.cancel()
+        githubActionsMonitorTask = nil
+
+        let monitoredRepositories = repositories.filter { $0.githubRepository != nil }
+        guard !monitoredRepositories.isEmpty else {
+            githubActionsByCommit.removeAll(keepingCapacity: false)
+            githubActionsNotice = nil
+            return
+        }
+
+        let repositoryIDs = Set(monitoredRepositories.map(\.id))
+        githubActionsMonitorTask = Task { [weak self] in
+            guard let self else { return }
+            if reloadAuthentication {
+                await self.githubActionsService.reloadAuthentication()
+            }
+            let isAuthenticated = await self.githubActionsService.isAuthenticated()
+            while !Task.isCancelled {
+                await self.loadGitHubActionsOnce(
+                    repositories: monitoredRepositories,
+                    expectedRepositoryIDs: repositoryIDs
+                )
+                guard !Task.isCancelled else { return }
+
+                let hasActiveRun = self.githubActionsByCommit.values.contains {
+                    $0.state.isActive
+                }
+                let isFastPolling = hasActiveRun
+                    || (self.githubActionsFastPollUntil.map { $0 > .now } ?? false)
+                let interval: Duration = if isAuthenticated {
+                    isFastPolling ? .seconds(6) : .seconds(60)
+                } else {
+                    isFastPolling ? .seconds(15) : .seconds(300)
+                }
+                do {
+                    try await Task.sleep(for: interval)
+                } catch {
+                    return
+                }
+            }
+        }
+    }
+
+    private func loadGitHubActionsOnce(
+        repositories: [GitRepository],
+        expectedRepositoryIDs: Set<RepositoryID>
+    ) async {
+        var updatedSummaries = githubActionsByCommit
+        var notices: [String] = []
+
+        for repository in repositories {
+            guard !Task.isCancelled else { return }
+            do {
+                let summaries = try await githubActionsService.loadWorkflowSummaries(
+                    repository: repository
+                )
+                guard Set(
+                    self.repositories.filter { $0.githubRepository != nil }.map(\.id)
+                ) == expectedRepositoryIDs else {
+                    return
+                }
+                updatedSummaries = updatedSummaries.filter {
+                    $0.key.repositoryID != repository.id
+                }
+                updatedSummaries.merge(summaries) { _, new in new }
+            } catch {
+                notices.append("\(repository.name): \(error.localizedDescription)")
+            }
+        }
+
+        guard !Task.isCancelled,
+              Set(
+                  self.repositories.filter { $0.githubRepository != nil }.map(\.id)
+              ) == expectedRepositoryIDs else {
+            return
+        }
+        githubActionsByCommit = updatedSummaries
+        githubActionsNotice = notices.isEmpty
+            ? nil
+            : notices.joined(separator: "\n")
+
+        if let selectedCommit,
+           githubActionsByCommit[selectedCommit.id] != nil,
+           (selectedGitHubChecksCommitID != selectedCommit.id
+               || githubActionsByCommit[selectedCommit.id]?.state.isActive == true) {
+            loadSelectedGitHubChecks(for: selectedCommit, preserveExisting: true)
+        }
+    }
+
+    private func loadSelectedGitHubChecks(
+        for commit: GitCommit,
+        preserveExisting: Bool = false
+    ) {
+        selectedGitHubChecksTask?.cancel()
+        selectedGitHubChecksTask = nil
+        if !preserveExisting {
+            selectedGitHubChecks.removeAll(keepingCapacity: false)
+            selectedGitHubChecksCommitID = nil
+        }
+        isLoadingSelectedGitHubChecks = false
+
+        guard !commit.isWorkingTree,
+              githubActionsByCommit[commit.id] != nil,
+              let repository = repositories.first(where: {
+                  $0.id == commit.id.repositoryID
+              }),
+              repository.githubRepository != nil else {
+            return
+        }
+
+        isLoadingSelectedGitHubChecks = true
+        selectedGitHubChecksTask = Task {
+            do {
+                let checks = try await githubActionsService.loadCheckRuns(
+                    repository: repository,
+                    commitSHA: commit.id.oid
+                )
+                guard !Task.isCancelled, selectedCommit?.id == commit.id else { return }
+                selectedGitHubChecks = checks
+                selectedGitHubChecksCommitID = commit.id
+            } catch {
+                guard !Task.isCancelled, selectedCommit?.id == commit.id else { return }
+                githubActionsNotice = "\(repository.name): \(error.localizedDescription)"
+            }
+            if !Task.isCancelled, selectedCommit?.id == commit.id {
+                isLoadingSelectedGitHubChecks = false
+                selectedGitHubChecksTask = nil
+            }
         }
     }
 

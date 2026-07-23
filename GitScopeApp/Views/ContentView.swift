@@ -177,6 +177,23 @@ private struct ToolWindowTabs: View {
                     .padding(.horizontal, 6)
             }
 
+            if let notice = model.githubActionsNotice {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .foregroundStyle(.orange)
+                    .help(notice)
+                    .accessibilityLabel("GitHub Actions 정보를 불러오지 못함")
+            }
+
+            if model.repositories.contains(where: { $0.githubRepository != nil }) {
+                Button {
+                    model.refreshGitHubActions()
+                } label: {
+                    Image(systemName: "bolt.horizontal.circle")
+                }
+                .buttonStyle(.plain)
+                .help("GitHub Actions 상태 새로고침")
+            }
+
             Button {
                 model.fetchAll()
             } label: {

@@ -41,7 +41,8 @@ struct HistoryView: View {
                     graphColumnWidth: graphColumnWidth,
                     graphLaneCount: graphLaneCount,
                     showsRepositoryColumn: model.repositories.count > 1,
-                    repositoryColorIndices: repositoryColorIndices
+                    repositoryColorIndices: repositoryColorIndices,
+                    githubActionsByCommit: model.githubActionsByCommit
                 ) { commit in
                     model.selectCommit(commit)
                 } onClearSelection: {

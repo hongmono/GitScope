@@ -30,6 +30,7 @@ struct VirtualizedHistoryList: View {
     let graphLaneCount: Int
     let showsRepositoryColumn: Bool
     let repositoryColorIndices: [RepositoryID: Int]
+    let githubActionsByCommit: [CommitID: GitHubActionsSummary]
     let onSelect: (GitCommit) -> Void
     let onClearSelection: () -> Void
     let onVisibleGraphLaneCountChange: (Int) -> Void
@@ -55,6 +56,7 @@ struct VirtualizedHistoryList: View {
                     graphColumnWidth: visibility.graphColumnWidth,
                     laneSpacing: visibility.laneSpacing,
                     repositoryColorIndices: repositoryColorIndices,
+                    githubActionsByCommit: githubActionsByCommit,
                     visibility: visibility,
                     onSelect: onSelect,
                     onClearSelection: onClearSelection,
@@ -164,6 +166,7 @@ private struct VirtualizedHistoryCollection: NSViewRepresentable {
     let graphColumnWidth: CGFloat
     let laneSpacing: CGFloat
     let repositoryColorIndices: [RepositoryID: Int]
+    let githubActionsByCommit: [CommitID: GitHubActionsSummary]
     let visibility: HistoryColumnVisibility
     let onSelect: (GitCommit) -> Void
     let onClearSelection: () -> Void
@@ -218,6 +221,7 @@ private struct VirtualizedHistoryCollection: NSViewRepresentable {
             graphColumnWidth: graphColumnWidth,
             laneSpacing: laneSpacing,
             repositoryColorIndices: repositoryColorIndices,
+            githubActionsByCommit: githubActionsByCommit,
             visibility: visibility,
             onSelect: onSelect,
             onClearSelection: onClearSelection,
@@ -233,6 +237,7 @@ private struct VirtualizedHistoryCollection: NSViewRepresentable {
             graphColumnWidth: graphColumnWidth,
             laneSpacing: laneSpacing,
             repositoryColorIndices: repositoryColorIndices,
+            githubActionsByCommit: githubActionsByCommit,
             visibility: visibility,
             onSelect: onSelect,
             onClearSelection: onClearSelection,
@@ -261,6 +266,7 @@ private struct VirtualizedHistoryCollection: NSViewRepresentable {
         private var graphColumnWidth: CGFloat = 112
         private var laneSpacing: CGFloat = 18
         private var repositoryColorIndices: [RepositoryID: Int] = [:]
+        private var githubActionsByCommit: [CommitID: GitHubActionsSummary] = [:]
         private var visibility = HistoryColumnVisibility(
             availableWidth: .greatestFiniteMagnitude,
             graphColumnWidth: 112,
@@ -281,6 +287,7 @@ private struct VirtualizedHistoryCollection: NSViewRepresentable {
             graphColumnWidth: CGFloat,
             laneSpacing: CGFloat,
             repositoryColorIndices: [RepositoryID: Int],
+            githubActionsByCommit: [CommitID: GitHubActionsSummary],
             visibility: HistoryColumnVisibility,
             onSelect: @escaping (GitCommit) -> Void,
             onClearSelection: @escaping () -> Void,
@@ -294,11 +301,13 @@ private struct VirtualizedHistoryCollection: NSViewRepresentable {
                 || self.graphColumnWidth != graphColumnWidth
                 || self.laneSpacing != laneSpacing
                 || self.repositoryColorIndices != repositoryColorIndices
+                || self.githubActionsByCommit != githubActionsByCommit
                 || self.visibility != visibility
 
             self.rows = rows
             rowIDs = newRowIDs
             self.repositoryColorIndices = repositoryColorIndices
+            self.githubActionsByCommit = githubActionsByCommit
             self.selectedCommitID = selectedCommitID
             self.graphColumnWidth = graphColumnWidth
             self.laneSpacing = laneSpacing
@@ -484,6 +493,7 @@ private struct VirtualizedHistoryCollection: NSViewRepresentable {
                 isSelected: selectedCommitID == row.id,
                 repositoryColorIndex: repositoryColorIndices[repositoryID] ?? 0,
                 showsRepositoryName: startsRepositoryRun,
+                githubActionsSummary: githubActionsByCommit[row.id],
                 visibility: visibility
             )
         }
@@ -563,6 +573,7 @@ private final class HistoryCollectionItem: NSCollectionViewItem, NSPopoverDelega
         isSelected: Bool,
         repositoryColorIndex: Int,
         showsRepositoryName: Bool,
+        githubActionsSummary: GitHubActionsSummary?,
         visibility: HistoryColumnVisibility
     ) {
         if displayedCommit != row.commit {
@@ -579,6 +590,7 @@ private final class HistoryCollectionItem: NSCollectionViewItem, NSPopoverDelega
                 isSelected: isSelected,
                 repositoryColorIndex: repositoryColorIndex,
                 showsRepositoryName: showsRepositoryName,
+                githubActionsSummary: githubActionsSummary,
                 visibility: visibility
             )
         )
@@ -719,6 +731,7 @@ private struct VirtualizedHistoryRow: View {
     let isSelected: Bool
     let repositoryColorIndex: Int
     let showsRepositoryName: Bool
+    let githubActionsSummary: GitHubActionsSummary?
     let visibility: HistoryColumnVisibility
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -750,7 +763,11 @@ private struct VirtualizedHistoryRow: View {
             .padding(.vertical, -3)
             .layoutPriority(3)
             columnDivider
-            CommitMessageHistoryCell(commit: row.commit, isSelected: isSelected)
+            CommitMessageHistoryCell(
+                commit: row.commit,
+                isSelected: isSelected,
+                githubActionsSummary: githubActionsSummary
+            )
                 .padding(.horizontal, 8)
                 .frame(
                     minWidth: HistoryColumnMetrics.minimumCommitWidth,
@@ -830,6 +847,7 @@ private struct RepositoryHistoryCell: View {
 private struct CommitMessageHistoryCell: View {
     let commit: GitCommit
     let isSelected: Bool
+    let githubActionsSummary: GitHubActionsSummary?
 
     var body: some View {
         HStack(spacing: 6) {
@@ -864,9 +882,130 @@ private struct CommitMessageHistoryCell: View {
                 Text("+\(commit.references.count - 3)")
                     .foregroundStyle(.secondary)
             }
+
+            if let githubActionsSummary {
+                Spacer(minLength: 8)
+                GitHubActionsHistoryBadge(
+                    summary: githubActionsSummary,
+                    isSelected: isSelected
+                )
+            }
         }
         .font(.system(size: 11))
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+private struct GitHubActionsHistoryBadge: View {
+    let summary: GitHubActionsSummary
+    let isSelected: Bool
+
+    var body: some View {
+        Button {
+            if let url = summary.primaryURL {
+                NSWorkspace.shared.open(url)
+            }
+        } label: {
+            HStack(spacing: 3) {
+                Image(systemName: systemImage)
+                Text(title)
+                    .lineLimit(1)
+            }
+            .font(.system(size: 9, weight: .semibold))
+            .foregroundStyle(isSelected ? Color.primary : color)
+            .padding(.horizontal, 5)
+            .padding(.vertical, 2)
+            .background(
+                Capsule()
+                    .fill(color.opacity(isSelected ? 0.22 : 0.12))
+            )
+            .overlay(
+                Capsule()
+                    .stroke(color.opacity(0.45), lineWidth: 0.5)
+            )
+        }
+        .buttonStyle(.plain)
+        .fixedSize()
+        .help(helpText)
+        .accessibilityLabel("GitHub Actions \(title)")
+    }
+
+    private var title: String {
+        switch summary.state {
+        case .queued: return "대기 중"
+        case .inProgress: return "실행 중"
+        case .success: return "성공"
+        case .failure: return "실패"
+        case .cancelled: return "취소됨"
+        case .neutral: return "건너뜀"
+        case .unknown: return "확인 필요"
+        }
+    }
+
+    private var systemImage: String {
+        switch summary.state {
+        case .queued: return "clock.fill"
+        case .inProgress: return "arrow.triangle.2.circlepath"
+        case .success: return "checkmark.circle.fill"
+        case .failure: return "xmark.octagon.fill"
+        case .cancelled: return "slash.circle.fill"
+        case .neutral: return "minus.circle.fill"
+        case .unknown: return "questionmark.circle.fill"
+        }
+    }
+
+    private var color: Color {
+        switch summary.state {
+        case .queued: return .orange
+        case .inProgress: return .blue
+        case .success: return .green
+        case .failure: return .red
+        case .cancelled, .neutral, .unknown: return .secondary
+        }
+    }
+
+    private var helpText: String {
+        let workflows = summary.runs.prefix(6).map { run in
+            "\(run.name): \(GitHubActionsLabels.title(for: run.state))"
+        }
+        return (["GitHub Actions · \(summary.runs.count)개 워크플로"] + workflows)
+            .joined(separator: "\n")
+    }
+}
+
+enum GitHubActionsLabels {
+    static func title(for state: GitHubActionsState) -> String {
+        switch state {
+        case .queued: return "대기 중"
+        case .inProgress: return "실행 중"
+        case .success: return "성공"
+        case .failure: return "실패"
+        case .cancelled: return "취소됨"
+        case .neutral: return "건너뜀"
+        case .unknown: return "확인 필요"
+        }
+    }
+
+    static func systemImage(for state: GitHubActionsState) -> String {
+        switch state {
+        case .queued: return "clock.fill"
+        case .inProgress: return "arrow.triangle.2.circlepath"
+        case .success: return "checkmark.circle.fill"
+        case .failure: return "xmark.octagon.fill"
+        case .cancelled: return "slash.circle.fill"
+        case .neutral: return "minus.circle.fill"
+        case .unknown: return "questionmark.circle.fill"
+        }
+    }
+
+    static func color(for state: GitHubActionsState) -> Color {
+        switch state {
+        case .queued: return .orange
+        case .inProgress: return .blue
+        case .success: return .green
+        case .failure: return .red
+        case .cancelled, .neutral, .unknown: return .secondary
+        }
     }
 }
 

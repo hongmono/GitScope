@@ -38,6 +38,7 @@ struct GitRepository: Identifiable, Hashable, Sendable {
     let name: String
     let rootURL: URL
     let colorIndex: Int
+    let githubRepository: GitHubRepository?
 }
 
 struct GitReference: Identifiable, Hashable, Sendable {
@@ -127,6 +128,157 @@ struct ChangedFile: Identifiable, Hashable, Sendable {
 struct CommitDetails: Sendable {
     let commit: GitCommit
     let files: [ChangedFile]
+}
+
+struct GitHubRepository: Hashable, Sendable {
+    let owner: String
+    let name: String
+
+    var webURL: URL {
+        URL(string: "https://github.com/\(owner)/\(name)")!
+    }
+
+    var apiURL: URL {
+        URL(string: "https://api.github.com/repos/\(owner)/\(name)")!
+    }
+
+    init?(remoteURL: String) {
+        let trimmed = remoteURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+
+        let path: String
+        if let scpSeparator = trimmed.firstIndex(of: ":"),
+           !trimmed.contains("://"),
+           trimmed[..<scpSeparator].contains("@") {
+            let hostStart = trimmed.index(after: trimmed.firstIndex(of: "@")!)
+            let host = trimmed[hostStart..<scpSeparator]
+            guard host.caseInsensitiveCompare("github.com") == .orderedSame else {
+                return nil
+            }
+            path = String(trimmed[trimmed.index(after: scpSeparator)...])
+        } else {
+            guard let components = URLComponents(string: trimmed),
+                  components.host?.caseInsensitiveCompare("github.com") == .orderedSame else {
+                return nil
+            }
+            path = components.path
+        }
+
+        let parts = path
+            .split(separator: "/", omittingEmptySubsequences: true)
+            .map(String.init)
+        guard parts.count == 2 else { return nil }
+
+        let repositoryName = parts[1].hasSuffix(".git")
+            ? String(parts[1].dropLast(4))
+            : parts[1]
+        guard !parts[0].isEmpty, !repositoryName.isEmpty else { return nil }
+
+        owner = parts[0]
+        name = repositoryName
+    }
+}
+
+enum GitHubActionsState: String, Hashable, Sendable {
+    case queued
+    case inProgress
+    case success
+    case failure
+    case cancelled
+    case neutral
+    case unknown
+
+    var isActive: Bool {
+        self == .queued || self == .inProgress
+    }
+}
+
+struct GitHubWorkflowRun: Identifiable, Hashable, Sendable {
+    let id: Int64
+    let name: String
+    let displayTitle: String
+    let headSHA: String
+    let pullRequestHeadSHAs: [String]
+    let headBranch: String?
+    let event: String
+    let status: String
+    let conclusion: String?
+    let webURL: URL
+    let runNumber: Int
+    let runAttempt: Int
+    let updatedAt: Date
+
+    var state: GitHubActionsState {
+        GitHubActionsState(status: status, conclusion: conclusion)
+    }
+}
+
+struct GitHubActionsSummary: Hashable, Sendable {
+    let commitID: CommitID
+    let repository: GitHubRepository
+    let runs: [GitHubWorkflowRun]
+
+    var state: GitHubActionsState {
+        GitHubActionsState.aggregate(runs.map(\.state))
+    }
+
+    var primaryURL: URL? {
+        runs.first(where: { $0.state.isActive })?.webURL
+            ?? runs.first(where: { $0.state == .failure })?.webURL
+            ?? runs.first?.webURL
+    }
+}
+
+struct GitHubCheckRun: Identifiable, Hashable, Sendable {
+    let id: Int64
+    let name: String
+    let status: String
+    let conclusion: String?
+    let webURL: URL?
+    let appName: String?
+    let startedAt: Date?
+    let completedAt: Date?
+
+    var state: GitHubActionsState {
+        GitHubActionsState(status: status, conclusion: conclusion)
+    }
+}
+
+extension GitHubActionsState {
+    init(status: String, conclusion: String?) {
+        switch status {
+        case "queued", "requested", "waiting", "pending":
+            self = .queued
+        case "in_progress":
+            self = .inProgress
+        case "completed":
+            switch conclusion {
+            case "success":
+                self = .success
+            case "failure", "timed_out", "action_required", "stale":
+                self = .failure
+            case "cancelled":
+                self = .cancelled
+            case "neutral", "skipped":
+                self = .neutral
+            default:
+                self = .unknown
+            }
+        default:
+            self = .unknown
+        }
+    }
+
+    static func aggregate(_ states: [GitHubActionsState]) -> GitHubActionsState {
+        if states.contains(.inProgress) { return .inProgress }
+        if states.contains(.queued) { return .queued }
+        if states.contains(.failure) { return .failure }
+        if states.contains(.cancelled) { return .cancelled }
+        if states.contains(.unknown) { return .unknown }
+        if states.contains(.success) { return .success }
+        if states.contains(.neutral) { return .neutral }
+        return .unknown
+    }
 }
 
 struct GraphRowLayout: Sendable, Hashable {

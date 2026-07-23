@@ -95,7 +95,12 @@ struct CommitDetailsView: View {
             Divider()
 
             if let commit = model.selectedCommit, model.selectedFile == nil {
-                CommitInformationView(commit: commit)
+                CommitInformationView(
+                    commit: commit,
+                    githubActionsSummary: model.githubActionsByCommit[commit.id],
+                    githubChecks: model.selectedGitHubChecks,
+                    isLoadingGitHubChecks: model.isLoadingSelectedGitHubChecks
+                )
             } else if model.selectedCommit == nil {
                 DetailsPlaceholder(text: "커밋 세부 정보")
             } else if model.isLoadingPatch {
@@ -120,6 +125,9 @@ struct CommitDetailsView: View {
 
 private struct CommitInformationView: View {
     let commit: GitCommit
+    let githubActionsSummary: GitHubActionsSummary?
+    let githubChecks: [GitHubCheckRun]
+    let isLoadingGitHubChecks: Bool
 
     private var messageBody: String {
         let body = commit.body.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -151,6 +159,14 @@ private struct CommitInformationView: View {
                         .font(.system(size: 11))
                         .textSelection(.enabled)
                         .fixedSize(horizontal: false, vertical: true)
+                }
+
+                if let githubActionsSummary {
+                    GitHubActionsDetailsSection(
+                        summary: githubActionsSummary,
+                        checks: githubChecks,
+                        isLoadingChecks: isLoadingGitHubChecks
+                    )
                 }
 
                 Divider()
@@ -223,6 +239,126 @@ private struct CommitInformationView: View {
         case .remote: return "원격"
         case .tag: return "태그"
         }
+    }
+}
+
+private struct GitHubActionsDetailsSection: View {
+    let summary: GitHubActionsSummary
+    let checks: [GitHubCheckRun]
+    let isLoadingChecks: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 9) {
+            HStack(spacing: 6) {
+                Image(systemName: GitHubActionsLabels.systemImage(for: summary.state))
+                    .foregroundStyle(GitHubActionsLabels.color(for: summary.state))
+                Text("GitHub Actions")
+                    .font(.system(size: 11, weight: .semibold))
+                Text(GitHubActionsLabels.title(for: summary.state))
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(GitHubActionsLabels.color(for: summary.state))
+                Spacer(minLength: 8)
+                if let url = summary.primaryURL {
+                    Button("GitHub에서 열기") {
+                        NSWorkspace.shared.open(url)
+                    }
+                    .buttonStyle(.link)
+                    .font(.system(size: 10))
+                }
+            }
+
+            VStack(alignment: .leading, spacing: 6) {
+                ForEach(summary.runs) { run in
+                    GitHubActionsResultRow(
+                        title: run.name,
+                        detail: workflowDetail(run),
+                        state: run.state,
+                        webURL: run.webURL
+                    )
+                }
+            }
+
+            if isLoadingChecks {
+                HStack(spacing: 7) {
+                    ProgressView()
+                        .controlSize(.mini)
+                    Text("Job 상태를 불러오는 중…")
+                        .font(.system(size: 10))
+                        .foregroundStyle(.secondary)
+                }
+            } else if !checks.isEmpty {
+                Divider()
+                Text("Jobs 및 Checks")
+                    .font(.system(size: 9, weight: .medium))
+                    .foregroundStyle(.secondary)
+
+                VStack(alignment: .leading, spacing: 6) {
+                    ForEach(checks) { check in
+                        GitHubActionsResultRow(
+                            title: check.name,
+                            detail: check.appName,
+                            state: check.state,
+                            webURL: check.webURL
+                        )
+                    }
+                }
+            }
+        }
+        .padding(10)
+        .background(
+            RoundedRectangle(cornerRadius: 7)
+                .fill(Color(nsColor: .controlBackgroundColor))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 7)
+                .stroke(Color(nsColor: .separatorColor).opacity(0.55), lineWidth: 0.5)
+        )
+    }
+
+    private func workflowDetail(_ run: GitHubWorkflowRun) -> String {
+        var parts = ["#\(run.runNumber)"]
+        if let branch = run.headBranch, !branch.isEmpty {
+            parts.append(branch)
+        }
+        parts.append(run.event)
+        return parts.joined(separator: " · ")
+    }
+}
+
+private struct GitHubActionsResultRow: View {
+    let title: String
+    let detail: String?
+    let state: GitHubActionsState
+    let webURL: URL?
+
+    var body: some View {
+        Button {
+            if let webURL {
+                NSWorkspace.shared.open(webURL)
+            }
+        } label: {
+            HStack(spacing: 7) {
+                Image(systemName: GitHubActionsLabels.systemImage(for: state))
+                    .foregroundStyle(GitHubActionsLabels.color(for: state))
+                    .frame(width: 13)
+                Text(title)
+                    .font(.system(size: 10.5, weight: .medium))
+                    .lineLimit(1)
+                if let detail, !detail.isEmpty {
+                    Text(detail)
+                        .font(.system(size: 9.5))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+                Spacer(minLength: 4)
+                Text(GitHubActionsLabels.title(for: state))
+                    .font(.system(size: 9))
+                    .foregroundStyle(GitHubActionsLabels.color(for: state))
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(webURL == nil)
     }
 }
 

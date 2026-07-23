@@ -182,11 +182,17 @@ actor GitRepositoryLoader {
         let normalizedURL = URL(fileURLWithPath: topLevel)
             .standardizedFileURL
             .resolvingSymlinksInPath()
+        let originURL = try? await runner.runText(
+            repositoryURL: normalizedURL,
+            arguments: ["remote", "get-url", "origin"],
+            maximumBytes: 16_384
+        )
         return GitRepository(
             id: RepositoryID(rawValue: normalizedURL.path),
             name: normalizedURL.lastPathComponent,
             rootURL: normalizedURL,
-            colorIndex: colorIndex
+            colorIndex: colorIndex,
+            githubRepository: originURL.flatMap(GitHubRepository.init(remoteURL:))
         )
     }
 
