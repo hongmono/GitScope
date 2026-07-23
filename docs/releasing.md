@@ -12,7 +12,7 @@ pull request에서는 fork를 포함한 변경 코드에 Apple 인증 정보가 
 
 ## GitHub Actions secrets
 
-저장소의 **Settings → Environments → release → Environment secrets**에 다음 값을 등록합니다. 배포 job은 `release` Environment 승인을 받은 뒤에만 이 값을 읽습니다.
+저장소의 **Settings → Environments → release → Environment secrets**에 다음 값을 등록합니다. 배포 job만 `release` Environment 범위에서 이 값을 읽습니다.
 
 | 이름 | 값 |
 | --- | --- |
@@ -42,13 +42,13 @@ Sparkle private key는 업데이트 ZIP과 appcast를 서명할 때만 사용합
 
 ## 배포 활성화
 
-`release` Environment에는 hongmono 사용자의 배포 승인이 필요하고 `release` 브랜치만 배포할 수 있도록 설정합니다. 모든 secret을 등록한 후 저장소의 **Actions variables**에 있는 `RELEASE_ENABLED`를 `true`로 변경합니다.
+`release` Environment는 required reviewer 없이 `release` 브랜치만 배포할 수 있도록 설정합니다. 모든 secret을 등록한 후 저장소의 **Actions variables**에 있는 `RELEASE_ENABLED`를 `true`로 변경합니다.
 
 ```sh
 gh variable set RELEASE_ENABLED --body true --repo hongmono/GitScope
 ```
 
-그 전까지 `release` push는 Release 빌드 검증까지만 실행되고 서명·공증·배포 job은 건너뜁니다. 활성화 후에는 `release` push가 빌드를 시작하고, Environment 승인 뒤 서명·공증·배포를 계속합니다.
+그 전까지 `release` push는 Release 빌드 검증까지만 실행되고 서명·공증·배포 job은 건너뜁니다. 활성화 후에는 `release` push가 빌드, 서명, 공증, 배포를 자동으로 진행합니다.
 
 ## 배포 실행
 
