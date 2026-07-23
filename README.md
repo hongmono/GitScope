@@ -36,6 +36,8 @@ Homebrew를 사용하지 않는 경우 [GitHub Releases](https://github.com/hong
 - 작업 중 항목에서 변경 파일과 unified diff 확인
 - 커밋 우클릭 팝오버에서 브랜치/태그 확인 및 해시·메시지 복사
 - 커밋 메시지, 작성자, 시간 표시
+- GitHub 저장소 커밋의 Actions 상태를 커밋 메시지 오른쪽에 표시
+- Actions 실행 중 자동 갱신, 워크플로 및 Job/Check 결과와 GitHub 링크 제공
 - 메시지/해시 검색, 작성자/기간/저장소 필터
 - 경로 필터 재조회
 - 변경 파일과 unified diff 표시
@@ -43,6 +45,8 @@ Homebrew를 사용하지 않는 경우 [GitHub Releases](https://github.com/hong
 - Sparkle 기반 자동 업데이트 확인과 앱 내 설치
 
 commit, checkout, merge, force push 기능은 포함하지 않습니다. Pull은 현재 체크아웃되어 있고 upstream이 설정된 브랜치에 `--rebase` 방식으로 실행됩니다.
+
+공개 GitHub 저장소의 Actions 상태는 별도 설정 없이 조회합니다. 비공개 저장소는 [GitHub CLI](https://cli.github.com/)가 설치되어 있고 `gh auth login`으로 로그인되어 있으면 기존 Keychain 인증을 재사용합니다. 토큰은 GitScope 설정이나 파일에 별도로 저장하지 않습니다.
 
 ## 열기
 
