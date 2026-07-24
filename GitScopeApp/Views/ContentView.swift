@@ -128,6 +128,9 @@ private struct WorkspaceLoadingOverlay: View {
 
 private struct ToolWindowTabs: View {
     @ObservedObject var model: AppModel
+    @State private var tabContentWidth: CGFloat = 640
+
+    private let maximumTabContentWidth: CGFloat = 640
 
     var body: some View {
         HStack(spacing: 4) {
@@ -148,10 +151,26 @@ private struct ToolWindowTabs: View {
                             )
                         }
                     }
+                    .background {
+                        GeometryReader { geometry in
+                            Color.clear.preference(
+                                key: TabContentWidthPreferenceKey.self,
+                                value: geometry.size.width
+                            )
+                        }
+                    }
                 }
                 .scrollIndicators(.hidden)
-                .frame(maxWidth: 640, alignment: .leading)
+                .frame(
+                    minWidth: 0,
+                    idealWidth: min(tabContentWidth, maximumTabContentWidth),
+                    maxWidth: min(tabContentWidth, maximumTabContentWidth),
+                    alignment: .leading
+                )
                 .layoutPriority(1)
+                .onPreferenceChange(TabContentWidthPreferenceKey.self) { width in
+                    tabContentWidth = width
+                }
             }
 
             Button {
@@ -207,6 +226,14 @@ private struct ToolWindowTabs: View {
         .padding(.horizontal, 10)
         .frame(height: 34)
         .background(Color(nsColor: .controlBackgroundColor))
+    }
+}
+
+private struct TabContentWidthPreferenceKey: PreferenceKey {
+    static let defaultValue: CGFloat = 0
+
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = max(value, nextValue())
     }
 }
 
