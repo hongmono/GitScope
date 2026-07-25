@@ -43,6 +43,28 @@ final class AppModel: ObservableObject {
     @Published private(set) var selectedReference: GitReference?
     @Published private(set) var selectedReferenceGroupID: String?
     @Published private(set) var isCurrentBranchesSelected = false
+    @Published var isBranchSidebarVisible =
+        UserDefaults.standard.object(
+            forKey: AppModel.branchSidebarVisibleDefaultsKey
+        ) as? Bool ?? true {
+        didSet {
+            UserDefaults.standard.set(
+                isBranchSidebarVisible,
+                forKey: Self.branchSidebarVisibleDefaultsKey
+            )
+        }
+    }
+    @Published var isCommitDetailsVisible =
+        UserDefaults.standard.object(
+            forKey: AppModel.commitDetailsVisibleDefaultsKey
+        ) as? Bool ?? true {
+        didSet {
+            UserDefaults.standard.set(
+                isCommitDetailsVisible,
+                forKey: Self.commitDetailsVisibleDefaultsKey
+            )
+        }
+    }
 
     private let loader = GitRepositoryLoader()
     private let remoteService = GitRemoteService()
@@ -62,6 +84,8 @@ final class AppModel: ObservableObject {
     private var hasRestoredWorkspace = false
     private static let workspaceTabsDefaultsKey = "workspaceTabs.v1"
     private static let activeWorkspaceTabDefaultsKey = "activeWorkspaceTabID.v1"
+    private static let branchSidebarVisibleDefaultsKey = "branchSidebarVisible.v1"
+    private static let commitDetailsVisibleDefaultsKey = "commitDetailsVisible.v1"
 
     var availableAuthors: [String] {
         Array(Set(allCommits.filter { !$0.isWorkingTree }.map(\.authorName))).sorted()
