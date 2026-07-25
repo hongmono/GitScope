@@ -57,14 +57,18 @@ struct ContentView: View {
 
     private var workspaceContent: some View {
         HSplitView {
-            BranchSidebarView(model: model)
-                .frame(minWidth: 235, idealWidth: 285, maxWidth: 380)
+            if model.isBranchSidebarVisible {
+                BranchSidebarView(model: model)
+                    .frame(minWidth: 235, idealWidth: 285, maxWidth: 380)
+            }
 
             HistoryView(model: model)
                 .frame(minWidth: 650, idealWidth: 900)
 
-            CommitDetailsView(model: model)
-                .frame(minWidth: 300, idealWidth: 480)
+            if model.isCommitDetailsVisible {
+                CommitDetailsView(model: model)
+                    .frame(minWidth: 300, idealWidth: 480)
+            }
         }
     }
 }
@@ -134,6 +138,18 @@ private struct ToolWindowTabs: View {
 
     var body: some View {
         HStack(spacing: 4) {
+            Button {
+                model.isBranchSidebarVisible.toggle()
+            } label: {
+                Image(systemName: "sidebar.leading")
+            }
+            .buttonStyle(.plain)
+            .help(
+                model.isBranchSidebarVisible
+                    ? "브랜치 사이드바 숨기기 (⌘B)"
+                    : "브랜치 사이드바 보기 (⌘B)"
+            )
+
             if !model.workspaceTabs.isEmpty {
                 ScrollView(.horizontal) {
                     HStack(spacing: 4) {
@@ -221,6 +237,18 @@ private struct ToolWindowTabs: View {
             .buttonStyle(.plain)
             .disabled(model.repositories.isEmpty || model.isLoading)
             .help("모든 원격 저장소 가져오기 (⌘R)")
+
+            Button {
+                model.isCommitDetailsVisible.toggle()
+            } label: {
+                Image(systemName: "sidebar.trailing")
+            }
+            .buttonStyle(.plain)
+            .help(
+                model.isCommitDetailsVisible
+                    ? "커밋 상세 숨기기 (⇧⌘B)"
+                    : "커밋 상세 보기 (⇧⌘B)"
+            )
         }
         .font(.system(size: 12))
         .padding(.horizontal, 10)
