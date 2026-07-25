@@ -58,6 +58,26 @@ struct GitScopeApp: App {
                 .disabled(model.remoteOperation != nil)
             }
 
+            CommandGroup(after: .sidebar) {
+                Button(
+                    model.isBranchSidebarVisible
+                        ? "브랜치 사이드바 숨기기"
+                        : "브랜치 사이드바 보기"
+                ) {
+                    model.isBranchSidebarVisible.toggle()
+                }
+                .keyboardShortcut("b", modifiers: .command)
+
+                Button(
+                    model.isCommitDetailsVisible
+                        ? "커밋 상세 숨기기"
+                        : "커밋 상세 보기"
+                ) {
+                    model.isCommitDetailsVisible.toggle()
+                }
+                .keyboardShortcut("b", modifiers: [.command, .shift])
+            }
+
             CommandMenu("Git") {
                 Button("모든 원격 저장소 가져오기") {
                     model.fetchAll()
