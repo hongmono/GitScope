@@ -20,7 +20,7 @@ GitScope 워크스페이스 화면의 왼쪽 브랜치 사이드바와 오른쪽
 
 - `@Published var isBranchSidebarVisible: Bool` (기본값 `true`)
 - `@Published var isCommitDetailsVisible: Bool` (기본값 `true`)
-- `didSet`에서 UserDefaults 저장, `init`에서 복원
+- `didSet`에서 UserDefaults 저장, 프로퍼티 초기값 식에서 복원
 - 키: `branchSidebarVisible.v1`, `commitDetailsVisible.v1`
   (기존 `workspaceTabs.v1` 네이밍 컨벤션을 따름)
 
@@ -53,7 +53,8 @@ GitScope 워크스페이스 화면의 왼쪽 브랜치 사이드바와 오른쪽
 ## 범위 밖
 
 - 패널 전환 애니메이션
-- 사이드바 폭 기억(HSplitView 기본 동작에 위임)
+- 사이드바 폭 기억 — 숨겼다 다시 표시하면 HSplitView 특성상 폭이 유지되지
+  않는다(재표시 시 min/max 사이 임의 값). 후속 개선 후보.
 - Welcome/로딩 화면 동작 변경(워크스페이스 콘텐츠에만 적용)
 
 ## 검증
