@@ -3,8 +3,6 @@ import SwiftUI
 
 struct BranchSidebarView: View {
     @ObservedObject var model: AppModel
-    @State private var expandedReferenceGroups: Set<GitReference.Kind> = [.local]
-    @State private var collapsedReferenceFolders: Set<String> = []
 
     private var normalizedSearch: String {
         model.branchSearch.trimmingCharacters(in: .whitespacesAndNewlines).localizedLowercase
@@ -84,15 +82,15 @@ struct BranchSidebarView: View {
     }
 
     private func isReferenceGroupExpanded(_ kind: GitReference.Kind) -> Bool {
-        !normalizedSearch.isEmpty || expandedReferenceGroups.contains(kind)
+        !normalizedSearch.isEmpty || model.expandedReferenceGroups.contains(kind)
     }
 
     private func toggleReferenceGroup(_ kind: GitReference.Kind) {
         guard normalizedSearch.isEmpty else { return }
-        if expandedReferenceGroups.contains(kind) {
-            expandedReferenceGroups.remove(kind)
+        if model.expandedReferenceGroups.contains(kind) {
+            model.expandedReferenceGroups.remove(kind)
         } else {
-            expandedReferenceGroups.insert(kind)
+            model.expandedReferenceGroups.insert(kind)
         }
     }
 
@@ -170,7 +168,7 @@ struct BranchSidebarView: View {
         _ folder: ReferenceFolder,
         kind: GitReference.Kind
     ) -> Bool {
-        !normalizedSearch.isEmpty || !collapsedReferenceFolders.contains(folderStateID(folder, kind: kind))
+        !normalizedSearch.isEmpty || !model.collapsedReferenceFolders.contains(folderStateID(folder, kind: kind))
     }
 
     private func toggleReferenceFolder(
@@ -179,10 +177,10 @@ struct BranchSidebarView: View {
     ) {
         guard normalizedSearch.isEmpty else { return }
         let id = folderStateID(folder, kind: kind)
-        if collapsedReferenceFolders.contains(id) {
-            collapsedReferenceFolders.remove(id)
+        if model.collapsedReferenceFolders.contains(id) {
+            model.collapsedReferenceFolders.remove(id)
         } else {
-            collapsedReferenceFolders.insert(id)
+            model.collapsedReferenceFolders.insert(id)
         }
     }
 

@@ -30,6 +30,8 @@ final class AppModel: ObservableObject {
         didSet { scheduleQueryRebuild() }
     }
     @Published var branchSearch = ""
+    @Published var expandedReferenceGroups: Set<GitReference.Kind> = [.local]
+    @Published var collapsedReferenceFolders: Set<String> = []
     @Published var pathFilter = ""
     @Published var authorFilter: String? {
         didSet { rebuildRows() }
