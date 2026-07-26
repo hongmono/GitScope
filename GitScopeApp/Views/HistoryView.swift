@@ -52,7 +52,7 @@ struct HistoryView: View {
                 }
             }
         }
-        .background(Color(nsColor: .textBackgroundColor))
+        .background(.clear)
     }
 }
 
@@ -61,28 +61,12 @@ private struct HistoryFilterBar: View {
 
     var body: some View {
         HStack(spacing: 8) {
-            HStack(spacing: 6) {
-                Image(systemName: "magnifyingglass")
-                    .foregroundStyle(.secondary)
-                TextField("텍스트 또는 해시", text: $model.query)
-                    .textFieldStyle(.plain)
-                if !model.query.isEmpty {
-                    Button {
-                        model.query = ""
-                    } label: {
-                        Image(systemName: "xmark.circle.fill")
-                            .foregroundStyle(.tertiary)
-                    }
-                    .buttonStyle(.plain)
-                }
-            }
-            .padding(.horizontal, 8)
-            .frame(minWidth: 180, maxWidth: 270)
-            .frame(height: 26)
-            .background(
-                RoundedRectangle(cornerRadius: 5)
-                    .stroke(Color(nsColor: .separatorColor))
+            HistorySearchField(
+                text: $model.query,
+                prompt: "텍스트 또는 해시"
             )
+            .frame(minWidth: 120, maxWidth: 270)
+            .frame(height: 28)
 
             FilterMenu(
                 title: model.selectedReference?.shortName ?? "브랜치",
@@ -151,13 +135,16 @@ private struct HistoryFilterBar: View {
             Spacer(minLength: 4)
 
             Text("\(model.rows.count)개")
-                .font(.system(size: 10))
+                .font(AppFont.rowLabel)
                 .foregroundStyle(.secondary)
         }
-        .font(.system(size: 11))
-        .padding(.horizontal, 8)
-        .frame(height: 36)
-        .background(Color(nsColor: .controlBackgroundColor))
+        .font(AppFont.rowLabel)
+        // 창 가장자리까지 꽉 차는 띠라 카드 시절의 7pt 대신 툴바 관례인 10pt 를 쓴다.
+        .padding(.horizontal, 10)
+        .frame(height: 40)
+        // 자체 배경 채움을 두지 않는다. 바로 아래 히스토리 표의 열 머리글이 이미
+        // `columnHeaderFill` 띠라, 여기에도 채움을 깔면 미세하게 다른 두 띠가 붙어 지저분해진다.
+        // 표와의 구분은 아래 `Divider()` 헤어라인 한 줄이 담당한다.
     }
 
     private func referenceKindTitle(_ kind: GitReference.Kind) -> String {
@@ -165,6 +152,50 @@ private struct HistoryFilterBar: View {
         case .local: return "로컬"
         case .remote: return "원격"
         case .tag: return "태그"
+        }
+    }
+}
+
+/// 히스토리 검색 필드.
+///
+/// 브랜치 사이드바는 `.searchable(placement: .sidebar)` 를 쓰는데, 이는 내부적으로
+/// `NSSearchField` 를 그린다. 히스토리 검색은 필터 메뉴들과 한 줄에 놓여야 해서 `.searchable`
+/// 을 쓸 수 없으므로, 같은 `NSSearchField` 를 직접 얹어 두 검색 필드의 생김새를 맞춘다.
+/// 커스텀 컨테이너로 흉내 내면 모서리·테두리·클리어 버튼이 매번 시스템과 어긋난다.
+private struct HistorySearchField: NSViewRepresentable {
+    @Binding var text: String
+    let prompt: String
+
+    func makeNSView(context: Context) -> NSSearchField {
+        let field = NSSearchField()
+        field.delegate = context.coordinator
+        field.placeholderString = prompt
+        field.sendsWholeSearchString = false
+        field.sendsSearchStringImmediately = true
+        return field
+    }
+
+    func updateNSView(_ nsView: NSSearchField, context: Context) {
+        nsView.placeholderString = prompt
+        guard nsView.stringValue != text else { return }
+        nsView.stringValue = text
+    }
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(text: $text)
+    }
+
+    @MainActor
+    final class Coordinator: NSObject, NSSearchFieldDelegate {
+        private let text: Binding<String>
+
+        init(text: Binding<String>) {
+            self.text = text
+        }
+
+        func controlTextDidChange(_ obj: Notification) {
+            guard let field = obj.object as? NSSearchField else { return }
+            text.wrappedValue = field.stringValue
         }
     }
 }
@@ -184,11 +215,27 @@ private struct FilterMenu<Content: View>: View {
         Menu {
             content
         } label: {
-            Text(title)
-                .lineLimit(1)
+            HStack(spacing: 5) {
+                // 폭이 넉넉하면 제목 전체가 보이고, 좁아지면 그때 시스템이 가운데를 줄인다.
+                // `fixedSize()` 를 쓰면 긴 참조 이름만큼 필터 바 고유 폭이 늘어나고,
+                // 그 아래에서는 제안이 비어 있어 `frame(maxWidth:)` 도 clamp 되지 않는다.
+                Text(title)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
             .foregroundStyle(isActive ? Color.accentColor : .secondary)
+            .padding(.horizontal, 9)
+            .frame(height: 28)
+            .contentShape(Rectangle())
         }
+        // 셰브런은 `.borderlessButton` 이 레이블 뒤에 그려 주는 것만 쓴다. 레이블 HStack 에
+        // 직접 넣으면 이 스타일이 그것을 표시자로 보고 앞쪽으로 옮겨, 앞뒤로 두 개가 된다.
         .menuStyle(.borderlessButton)
-        .fixedSize()
+        .appGlassControl(
+            tint: isActive ? Color.accentColor : nil,
+            interactive: true
+        )
+        .help(title)
+        .accessibilityLabel(title)
     }
 }

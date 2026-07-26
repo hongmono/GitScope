@@ -34,6 +34,9 @@ struct VirtualizedHistoryList: View {
     let onSelect: (GitCommit) -> Void
     let onClearSelection: () -> Void
     let onVisibleGraphLaneCountChange: (Int) -> Void
+    /// 설정 토글이 바뀌면 이 값이 바뀌면서 `updateNSView` → 그래프 다시 그리기가 이어진다.
+    @AppStorage(AppSettings.authorAvatarLookupEnabledKey)
+    private var showsRemoteAvatars = true
 
     var body: some View {
         GeometryReader { proxy in
@@ -49,7 +52,6 @@ struct VirtualizedHistoryList: View {
                     graphColumnWidth: visibility.graphColumnWidth,
                     visibility: visibility
                 )
-                Divider()
                 VirtualizedHistoryCollection(
                     rows: rows,
                     selectedCommitID: selectedCommitID,
@@ -58,12 +60,14 @@ struct VirtualizedHistoryList: View {
                     repositoryColorIndices: repositoryColorIndices,
                     githubActionsByCommit: githubActionsByCommit,
                     visibility: visibility,
+                    showsRemoteAvatars: showsRemoteAvatars,
                     onSelect: onSelect,
                     onClearSelection: onClearSelection,
                     onVisibleGraphLaneCountChange: onVisibleGraphLaneCountChange
                 )
             }
         }
+        .background(.clear)
     }
 }
 
@@ -75,6 +79,547 @@ private enum HistoryColumnMetrics {
     static let rowHeight: CGFloat = 24
     static let topContentInset: CGFloat = 4
     static let minimumCommitWidth: CGFloat = 80
+}
+
+@MainActor
+private final class VisibleCommitGraphView: NSView {
+    private var rows: [CommitRow] = []
+    private var selectedCommitID: CommitID?
+    private var laneSpacing: CGFloat = 18
+    private var contentOffsetY: CGFloat = 0
+    private let avatarCache = NSCache<NSString, NSImage>()
+    private var avatarTasks: [String: Task<Void, Never>] = [:]
+    /// 조회 결과가 없는 것으로 확정된 키. 이 기록이 없으면 스크롤 알림마다 같은 작성자에 대해
+    /// `Task` 가 새로 생긴다(성공한 조회만 `avatarCache` 에 남기 때문).
+    private var unavailableAvatarKeys: Set<String> = []
+    /// 설정의 '커밋 작성자 아바타 불러오기' 상태. 꺼지면 캐시에 남은 이미지도 쓰지 않는다.
+    private var showsRemoteAvatars = AppSettings.isAuthorAvatarLookupEnabled
+
+    private let originX: CGFloat = 12
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        avatarCache.countLimit = 256
+    }
+
+    required init?(coder: NSCoder) {
+        super.init(coder: coder)
+        avatarCache.countLimit = 256
+    }
+
+    override var isFlipped: Bool {
+        true
+    }
+
+    override var isOpaque: Bool {
+        false
+    }
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        nil
+    }
+
+    /// `draw(_:)` 안에서 시맨틱 `NSColor` 를 그때그때 해석하므로 외형이 바뀌면 다시 그려야 한다.
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        needsDisplay = true
+    }
+
+    func configure(
+        rows: [CommitRow],
+        selectedCommitID: CommitID?,
+        laneSpacing: CGFloat,
+        contentOffsetY: CGFloat,
+        showsRemoteAvatars: Bool
+    ) {
+        self.rows = rows
+        self.selectedCommitID = selectedCommitID
+        self.laneSpacing = laneSpacing
+        self.contentOffsetY = contentOffsetY
+        self.showsRemoteAvatars = showsRemoteAvatars
+
+        if showsRemoteAvatars {
+            scheduleVisibleAvatarLoads()
+        } else {
+            cancelPendingAvatarLoads()
+            unavailableAvatarKeys.removeAll()
+        }
+        needsDisplay = true
+    }
+
+    func cancelPendingAvatarLoads() {
+        for task in avatarTasks.values {
+            task.cancel()
+        }
+        avatarTasks.removeAll()
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        super.draw(dirtyRect)
+        guard let context = NSGraphicsContext.current?.cgContext,
+              let visibleRange else {
+            return
+        }
+
+        context.saveGState()
+        context.clip(to: bounds)
+
+        for index in visibleRange {
+            drawConnections(
+                rows[index].graph,
+                rowFrame: frameForRow(at: index),
+                in: context
+            )
+        }
+
+        for index in visibleRange {
+            drawNode(
+                for: rows[index],
+                isSelected: selectedCommitID == rows[index].id,
+                rowFrame: frameForRow(at: index),
+                in: context
+            )
+        }
+
+        context.restoreGState()
+    }
+
+    private var visibleRange: ClosedRange<Int>? {
+        guard !rows.isEmpty, bounds.height > 0 else { return nil }
+
+        let rowHeight = HistoryColumnMetrics.rowHeight
+        let topInset = HistoryColumnMetrics.topContentInset
+        let firstContentY = max(0, contentOffsetY - topInset)
+        let lastContentY = max(
+            firstContentY,
+            contentOffsetY + bounds.height - topInset
+        )
+        let firstIndex = max(
+            0,
+            Int(floor(firstContentY / rowHeight)) - 1
+        )
+        let lastIndex = min(
+            rows.count - 1,
+            Int(ceil(lastContentY / rowHeight))
+        )
+        return firstIndex...max(firstIndex, lastIndex)
+    }
+
+    private func frameForRow(at index: Int) -> NSRect {
+        NSRect(
+            x: 0,
+            y: HistoryColumnMetrics.topContentInset
+                + CGFloat(index) * HistoryColumnMetrics.rowHeight
+                - contentOffsetY,
+            width: bounds.width,
+            height: HistoryColumnMetrics.rowHeight
+        )
+    }
+
+    private func drawConnections(
+        _ layout: GraphRowLayout,
+        rowFrame: NSRect,
+        in context: CGContext
+    ) {
+        let topY = rowFrame.minY
+        let centerY = rowFrame.midY
+        let bottomY = rowFrame.maxY
+
+        for connection in layout.passThroughConnections {
+            let incomingX = laneX(connection.incomingLane)
+            let outgoingX = laneX(connection.outgoingLane)
+            let path = CGMutablePath()
+            path.move(to: CGPoint(x: incomingX, y: topY))
+
+            if connection.incomingLane == connection.outgoingLane {
+                path.addLine(to: CGPoint(x: outgoingX, y: bottomY))
+            } else {
+                appendLaneTransition(
+                    to: path,
+                    fromX: incomingX,
+                    toX: outgoingX,
+                    topY: topY,
+                    bottomY: bottomY
+                )
+            }
+
+            stroke(
+                path,
+                color: graphColor(for: connection.colorIndex),
+                in: context
+            )
+        }
+
+        for (incomingIndex, incomingLane) in layout.incomingLanes.enumerated() {
+            let incomingX = laneX(incomingLane)
+            let nodeX = laneX(layout.nodeLane)
+            let path = CGMutablePath()
+            path.move(to: CGPoint(x: incomingX, y: topY))
+
+            if incomingLane == layout.nodeLane {
+                path.addLine(to: CGPoint(x: nodeX, y: centerY))
+            } else {
+                let verticalSpan = centerY - topY
+                path.addCurve(
+                    to: CGPoint(x: nodeX, y: centerY),
+                    control1: CGPoint(
+                        x: incomingX,
+                        y: topY + verticalSpan * 0.42
+                    ),
+                    control2: CGPoint(
+                        x: nodeX,
+                        y: centerY - verticalSpan * 0.42
+                    )
+                )
+            }
+
+            stroke(
+                path,
+                color: graphColor(
+                    for: layout.incomingColorIndices[incomingIndex]
+                ),
+                in: context
+            )
+        }
+
+        for (parentIndex, parentLane) in layout.parentLanes.enumerated() {
+            let nodeX = laneX(layout.nodeLane)
+            let parentX = laneX(parentLane)
+            let path = CGMutablePath()
+            path.move(to: CGPoint(x: nodeX, y: centerY))
+
+            if layout.nodeLane == parentLane {
+                path.addLine(to: CGPoint(x: parentX, y: bottomY))
+            } else {
+                let verticalSpan = bottomY - centerY
+                path.addCurve(
+                    to: CGPoint(x: parentX, y: bottomY),
+                    control1: CGPoint(
+                        x: nodeX,
+                        y: centerY + verticalSpan * 0.42
+                    ),
+                    control2: CGPoint(
+                        x: parentX,
+                        y: bottomY - verticalSpan * 0.42
+                    )
+                )
+            }
+
+            stroke(
+                path,
+                color: graphColor(
+                    for: layout.parentColorIndices[parentIndex]
+                ),
+                in: context
+            )
+        }
+    }
+
+    private func appendLaneTransition(
+        to path: CGMutablePath,
+        fromX: CGFloat,
+        toX: CGFloat,
+        topY: CGFloat,
+        bottomY: CGFloat
+    ) {
+        let verticalSpan = bottomY - topY
+        path.addCurve(
+            to: CGPoint(x: toX, y: bottomY),
+            control1: CGPoint(
+                x: fromX,
+                y: topY + verticalSpan * 0.42
+            ),
+            control2: CGPoint(
+                x: toX,
+                y: bottomY - verticalSpan * 0.42
+            )
+        )
+    }
+
+    private func stroke(
+        _ path: CGPath,
+        color: NSColor,
+        in context: CGContext
+    ) {
+        context.saveGState()
+        context.addPath(path)
+        context.setStrokeColor(cgColor(color))
+        context.setLineWidth(lineWidth)
+        context.setLineCap(.round)
+        context.setLineJoin(.round)
+        context.strokePath()
+        context.restoreGState()
+    }
+
+    private func drawNode(
+        for row: CommitRow,
+        isSelected: Bool,
+        rowFrame: NSRect,
+        in context: CGContext
+    ) {
+        let commit = row.commit
+        let center = CGPoint(
+            x: laneX(row.graph.nodeLane),
+            y: rowFrame.midY
+        )
+
+        if commit.isHead {
+            fillCircle(
+                center: center,
+                diameter: nodeDiameter + 10,
+                color: NSColor.controlAccentColor.withAlphaComponent(0.16),
+                in: context
+            )
+            strokeCircle(
+                center: center,
+                diameter: nodeDiameter + 7,
+                color: .controlAccentColor,
+                width: 1.75,
+                in: context
+            )
+        }
+
+        let nodeColor = graphColor(for: row.graph.nodeColorIndex)
+        if isSelected {
+            fillCircle(
+                center: center,
+                diameter: nodeDiameter + 6,
+                color: nodeColor.withAlphaComponent(0.24),
+                in: context
+            )
+        }
+
+        fillCircle(
+            center: center,
+            diameter: nodeDiameter + 3,
+            color: .textBackgroundColor,
+            in: context
+        )
+
+        if commit.isWorkingTree {
+            fillCircle(
+                center: center,
+                diameter: max(1, nodeDiameter - 3),
+                color: .systemOrange,
+                in: context
+            )
+            drawSymbol(
+                "hammer.fill",
+                center: center,
+                pointSize: max(5, nodeDiameter * 0.42),
+                color: .white
+            )
+        } else {
+            drawAvatar(for: commit, center: center, in: context)
+        }
+
+        strokeCircle(
+            center: center,
+            diameter: nodeDiameter,
+            color: nodeColor,
+            width: commit.parentOIDs.count > 1
+                ? min(3.25, max(lineWidth, nodeDiameter * 0.18))
+                : lineWidth,
+            in: context
+        )
+    }
+
+    private func drawAvatar(
+        for commit: GitCommit,
+        center: CGPoint,
+        in context: CGContext
+    ) {
+        let diameter = max(0, nodeDiameter - 4)
+        guard diameter > 0 else { return }
+
+        let rect = circleRect(center: center, diameter: diameter)
+        if showsRemoteAvatars,
+           let key = avatarKey(for: commit),
+           let image = avatarCache.object(forKey: key as NSString) {
+            NSGraphicsContext.saveGraphicsState()
+            NSBezierPath(ovalIn: rect).addClip()
+            let imageSide = min(image.size.width, image.size.height)
+            let sourceRect = NSRect(
+                x: (image.size.width - imageSide) * 0.5,
+                y: (image.size.height - imageSide) * 0.5,
+                width: imageSide,
+                height: imageSide
+            )
+            image.draw(
+                in: rect,
+                from: sourceRect,
+                operation: .sourceOver,
+                fraction: 1,
+                respectFlipped: true,
+                hints: [.interpolation: NSImageInterpolation.high]
+            )
+            NSGraphicsContext.restoreGraphicsState()
+            return
+        }
+
+        fillCircle(
+            center: center,
+            diameter: diameter,
+            color: authorColor(for: commit),
+            in: context
+        )
+        drawSymbol(
+            "person.fill",
+            center: center,
+            pointSize: 7,
+            color: .white.withAlphaComponent(0.96)
+        )
+    }
+
+    private func fillCircle(
+        center: CGPoint,
+        diameter: CGFloat,
+        color: NSColor,
+        in context: CGContext
+    ) {
+        context.saveGState()
+        context.setFillColor(cgColor(color))
+        context.fillEllipse(in: circleRect(center: center, diameter: diameter))
+        context.restoreGState()
+    }
+
+    private func strokeCircle(
+        center: CGPoint,
+        diameter: CGFloat,
+        color: NSColor,
+        width: CGFloat,
+        in context: CGContext
+    ) {
+        context.saveGState()
+        context.setStrokeColor(cgColor(color))
+        context.setLineWidth(width)
+        context.strokeEllipse(in: circleRect(center: center, diameter: diameter))
+        context.restoreGState()
+    }
+
+    private func drawSymbol(
+        _ name: String,
+        center: CGPoint,
+        pointSize: CGFloat,
+        color: NSColor
+    ) {
+        let pointConfiguration = NSImage.SymbolConfiguration(
+            pointSize: pointSize,
+            weight: .bold
+        )
+        let colorConfiguration = NSImage.SymbolConfiguration(
+            paletteColors: [color]
+        )
+        guard let image = NSImage(
+            systemSymbolName: name,
+            accessibilityDescription: nil
+        )?.withSymbolConfiguration(
+            pointConfiguration.applying(colorConfiguration)
+        ) else {
+            return
+        }
+
+        let imageRect = NSRect(
+            x: center.x - image.size.width * 0.5,
+            y: center.y - image.size.height * 0.5,
+            width: image.size.width,
+            height: image.size.height
+        )
+        image.draw(
+            in: imageRect,
+            from: .zero,
+            operation: .sourceOver,
+            fraction: 1,
+            respectFlipped: true,
+            hints: [.interpolation: NSImageInterpolation.high]
+        )
+    }
+
+    private func circleRect(center: CGPoint, diameter: CGFloat) -> CGRect {
+        CGRect(
+            x: center.x - diameter * 0.5,
+            y: center.y - diameter * 0.5,
+            width: diameter,
+            height: diameter
+        )
+    }
+
+    private func scheduleVisibleAvatarLoads() {
+        guard showsRemoteAvatars, let visibleRange else { return }
+
+        for index in visibleRange {
+            let commit = rows[index].commit
+            guard !commit.isWorkingTree,
+                  let key = avatarKey(for: commit),
+                  avatarCache.object(forKey: key as NSString) == nil,
+                  !unavailableAvatarKeys.contains(key),
+                  avatarTasks[key] == nil else {
+                continue
+            }
+
+            avatarTasks[key] = Task { [weak self] in
+                let data = await AuthorAvatarResolver.shared.imageData(for: commit)
+                guard !Task.isCancelled, let self else { return }
+                if let data, let image = NSImage(data: data) {
+                    self.avatarCache.setObject(image, forKey: key as NSString)
+                } else if self.showsRemoteAvatars {
+                    // 토글이 켜진 채로 조회에 실패한 경우에만 기록한다. 조회 도중 토글이 꺼져
+                    // nil 이 돌아온 것을 실패로 남기면 다시 켰을 때 복구되지 않는다.
+                    self.unavailableAvatarKeys.insert(key)
+                }
+                self.avatarTasks[key] = nil
+                self.needsDisplay = true
+            }
+        }
+    }
+
+    private func avatarKey(for commit: GitCommit) -> String? {
+        let email = commit.authorEmail
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        guard !email.isEmpty else { return nil }
+        return "\(commit.id.repositoryID.rawValue)::\(email)"
+    }
+
+    private var nodeDiameter: CGFloat {
+        min(18, max(2, laneSpacing + 2))
+    }
+
+    private var lineWidth: CGFloat {
+        min(2.75, max(0.5, nodeDiameter * 0.15))
+    }
+
+    private func laneX(_ lane: Int) -> CGFloat {
+        originX + CGFloat(lane) * laneSpacing
+    }
+
+    private func graphColor(for lane: Int) -> NSColor {
+        NSColor(AppPalette.graphColors[lane % AppPalette.graphColors.count])
+    }
+
+    private func authorColor(for commit: GitCommit) -> NSColor {
+        let key = commit.authorEmail.isEmpty
+            ? commit.authorName
+            : commit.authorEmail
+        let index = stableColorIndex(
+            for: key,
+            count: AppPalette.avatarColors.count
+        )
+        return NSColor(AppPalette.avatarColors[index])
+    }
+
+    private func stableColorIndex(for value: String, count: Int) -> Int {
+        var hash: UInt64 = 14_695_981_039_346_656_037
+        for byte in value.utf8 {
+            hash ^= UInt64(byte)
+            hash &*= 1_099_511_628_211
+        }
+        return Int(hash % UInt64(count))
+    }
+
+    private func cgColor(_ color: NSColor) -> CGColor {
+        color.usingColorSpace(.deviceRGB)?.cgColor ?? color.cgColor
+    }
 }
 
 private struct HistoryColumnVisibility: Equatable {
@@ -141,10 +686,15 @@ private struct HistoryColumnHeader: View {
                 headerCell("날짜", width: HistoryColumnMetrics.dateWidth)
             }
         }
-        .font(.system(size: 10, weight: .medium))
+        .font(AppFont.columnHeader)
         .foregroundStyle(.secondary)
         .frame(maxWidth: .infinity, minHeight: 25, maxHeight: 25, alignment: .leading)
-        .background(Color(nsColor: .controlBackgroundColor))
+        .background(AppColor.columnHeaderFill)
+        .overlay(alignment: .bottom) {
+            Rectangle()
+                .fill(AppColor.separator)
+                .frame(height: 1)
+        }
     }
 
     private func headerCell(_ title: String, width: CGFloat) -> some View {
@@ -155,7 +705,7 @@ private struct HistoryColumnHeader: View {
 
     private var columnDivider: some View {
         Rectangle()
-            .fill(Color(nsColor: .separatorColor).opacity(0.65))
+            .fill(AppColor.separator.opacity(0.36))
             .frame(width: 1)
     }
 }
@@ -168,6 +718,7 @@ private struct VirtualizedHistoryCollection: NSViewRepresentable {
     let repositoryColorIndices: [RepositoryID: Int]
     let githubActionsByCommit: [CommitID: GitHubActionsSummary]
     let visibility: HistoryColumnVisibility
+    let showsRemoteAvatars: Bool
     let onSelect: (GitCommit) -> Void
     let onClearSelection: () -> Void
     let onVisibleGraphLaneCountChange: (Int) -> Void
@@ -206,6 +757,13 @@ private struct VirtualizedHistoryCollection: NSViewRepresentable {
         collectionView.onWidthChange = { [weak coordinator = context.coordinator] in
             coordinator?.refreshVisibleRowsAfterResize()
         }
+
+        let graphOverlayView = VisibleCommitGraphView()
+        scrollView.contentView.addSubview(
+            graphOverlayView,
+            positioned: .above,
+            relativeTo: collectionView
+        )
         scrollView.contentView.postsBoundsChangedNotifications = true
         NotificationCenter.default.addObserver(
             context.coordinator,
@@ -215,6 +773,7 @@ private struct VirtualizedHistoryCollection: NSViewRepresentable {
         )
 
         context.coordinator.collectionView = collectionView
+        context.coordinator.graphOverlayView = graphOverlayView
         context.coordinator.apply(
             rows: rows,
             selectedCommitID: selectedCommitID,
@@ -223,6 +782,7 @@ private struct VirtualizedHistoryCollection: NSViewRepresentable {
             repositoryColorIndices: repositoryColorIndices,
             githubActionsByCommit: githubActionsByCommit,
             visibility: visibility,
+            showsRemoteAvatars: showsRemoteAvatars,
             onSelect: onSelect,
             onClearSelection: onClearSelection,
             onVisibleGraphLaneCountChange: onVisibleGraphLaneCountChange
@@ -239,6 +799,7 @@ private struct VirtualizedHistoryCollection: NSViewRepresentable {
             repositoryColorIndices: repositoryColorIndices,
             githubActionsByCommit: githubActionsByCommit,
             visibility: visibility,
+            showsRemoteAvatars: showsRemoteAvatars,
             onSelect: onSelect,
             onClearSelection: onClearSelection,
             onVisibleGraphLaneCountChange: onVisibleGraphLaneCountChange
@@ -251,6 +812,7 @@ private struct VirtualizedHistoryCollection: NSViewRepresentable {
             name: NSView.boundsDidChangeNotification,
             object: scrollView.contentView
         )
+        coordinator.graphOverlayView?.cancelPendingAvatarLoads()
     }
 
     @MainActor
@@ -259,6 +821,7 @@ private struct VirtualizedHistoryCollection: NSViewRepresentable {
         NSCollectionViewDelegate,
         NSCollectionViewPrefetching {
         weak var collectionView: NSCollectionView?
+        weak var graphOverlayView: VisibleCommitGraphView?
 
         private var rows: [CommitRow] = []
         private var rowIDs: [CommitID] = []
@@ -273,6 +836,7 @@ private struct VirtualizedHistoryCollection: NSViewRepresentable {
             graphLaneCount: 1,
             showsRepository: true
         )
+        private var showsRemoteAvatars = AppSettings.isAuthorAvatarLookupEnabled
         private var onSelect: ((GitCommit) -> Void)?
         private var onClearSelection: (() -> Void)?
         private var onVisibleGraphLaneCountChange: ((Int) -> Void)?
@@ -289,6 +853,7 @@ private struct VirtualizedHistoryCollection: NSViewRepresentable {
             repositoryColorIndices: [RepositoryID: Int],
             githubActionsByCommit: [CommitID: GitHubActionsSummary],
             visibility: HistoryColumnVisibility,
+            showsRemoteAvatars: Bool,
             onSelect: @escaping (GitCommit) -> Void,
             onClearSelection: @escaping () -> Void,
             onVisibleGraphLaneCountChange: @escaping (Int) -> Void
@@ -312,6 +877,7 @@ private struct VirtualizedHistoryCollection: NSViewRepresentable {
             self.graphColumnWidth = graphColumnWidth
             self.laneSpacing = laneSpacing
             self.visibility = visibility
+            self.showsRemoteAvatars = showsRemoteAvatars
             self.onSelect = onSelect
             self.onClearSelection = onClearSelection
             self.onVisibleGraphLaneCountChange = onVisibleGraphLaneCountChange
@@ -325,6 +891,7 @@ private struct VirtualizedHistoryCollection: NSViewRepresentable {
             }
             synchronizeSelection()
             updateVisibleGraphLaneCount()
+            updateGraphOverlay()
         }
 
         func numberOfSections(in collectionView: NSCollectionView) -> Int {
@@ -435,11 +1002,39 @@ private struct VirtualizedHistoryCollection: NSViewRepresentable {
             collectionView.collectionViewLayout?.invalidateLayout()
             updateVisibleItems()
             updateVisibleGraphLaneCount()
+            updateGraphOverlay()
             collectionView.needsLayout = true
         }
 
         @objc func visibleBoundsDidChange(_ notification: Notification) {
             updateVisibleGraphLaneCount()
+            updateGraphOverlay()
+        }
+
+        private func updateGraphOverlay() {
+            guard let collectionView,
+                  let scrollView = collectionView.enclosingScrollView,
+                  let graphOverlayView else {
+                return
+            }
+
+            let visibleRect = scrollView.contentView.bounds
+            let graphOriginX = visibility.showsRepository
+                ? HistoryColumnMetrics.repositoryWidth + 1
+                : HistoryColumnMetrics.singleRepositoryLeadingInset
+            graphOverlayView.frame = NSRect(
+                x: graphOriginX,
+                y: visibleRect.minY,
+                width: graphColumnWidth,
+                height: visibleRect.height
+            )
+            graphOverlayView.configure(
+                rows: rows,
+                selectedCommitID: selectedCommitID,
+                laneSpacing: laneSpacing,
+                contentOffsetY: visibleRect.minY,
+                showsRemoteAvatars: showsRemoteAvatars
+            )
         }
 
         private func updateVisibleGraphLaneCount() {
@@ -483,8 +1078,6 @@ private struct VirtualizedHistoryCollection: NSViewRepresentable {
         private func configure(_ item: HistoryCollectionItem, at index: Int) {
             let row = rows[index]
             let repositoryID = row.commit.id.repositoryID
-            let startsRepositoryRun = index == 0
-                || rows[index - 1].commit.id.repositoryID != repositoryID
             item.configure(
                 row: row,
                 rowIndex: index,
@@ -492,7 +1085,6 @@ private struct VirtualizedHistoryCollection: NSViewRepresentable {
                 laneSpacing: laneSpacing,
                 isSelected: selectedCommitID == row.id,
                 repositoryColorIndex: repositoryColorIndices[repositoryID] ?? 0,
-                showsRepositoryName: startsRepositoryRun,
                 githubActionsSummary: githubActionsByCommit[row.id],
                 visibility: visibility
             )
@@ -572,7 +1164,6 @@ private final class HistoryCollectionItem: NSCollectionViewItem, NSPopoverDelega
         laneSpacing: CGFloat,
         isSelected: Bool,
         repositoryColorIndex: Int,
-        showsRepositoryName: Bool,
         githubActionsSummary: GitHubActionsSummary?,
         visibility: HistoryColumnVisibility
     ) {
@@ -589,7 +1180,6 @@ private final class HistoryCollectionItem: NSCollectionViewItem, NSPopoverDelega
                 laneSpacing: laneSpacing,
                 isSelected: isSelected,
                 repositoryColorIndex: repositoryColorIndex,
-                showsRepositoryName: showsRepositoryName,
                 githubActionsSummary: githubActionsSummary,
                 visibility: visibility
             )
@@ -730,7 +1320,6 @@ private struct VirtualizedHistoryRow: View {
     let laneSpacing: CGFloat
     let isSelected: Bool
     let repositoryColorIndex: Int
-    let showsRepositoryName: Bool
     let githubActionsSummary: GitHubActionsSummary?
     let visibility: HistoryColumnVisibility
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -741,7 +1330,6 @@ private struct VirtualizedHistoryRow: View {
                 RepositoryHistoryCell(
                     commit: row.commit,
                     colorIndex: repositoryColorIndex,
-                    showsName: showsRepositoryName,
                     isSelected: isSelected
                 )
                 .frame(width: HistoryColumnMetrics.repositoryWidth)
@@ -752,16 +1340,13 @@ private struct VirtualizedHistoryRow: View {
                 Color.clear
                     .frame(width: HistoryColumnMetrics.singleRepositoryLeadingInset)
             }
-            CommitGraphView(
-                layout: row.graph,
-                commit: row.commit,
-                isSelected: isSelected,
-                laneSpacing: laneSpacing
-            )
-            .frame(width: graphColumnWidth)
-            .fixedSize(horizontal: true, vertical: false)
-            .padding(.vertical, -3)
-            .layoutPriority(3)
+            AppColor.subtleFill
+                .frame(width: graphColumnWidth)
+                .fixedSize(horizontal: true, vertical: false)
+                .layoutPriority(3)
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel("커밋 그래프")
+                .accessibilityValue(graphAccessibilityValue)
             columnDivider
             CommitMessageHistoryCell(
                 commit: row.commit,
@@ -785,7 +1370,7 @@ private struct VirtualizedHistoryRow: View {
             if visibility.showsAuthor {
                 columnDivider
                 Text(row.commit.authorName)
-                    .font(.system(size: 11, weight: .medium))
+                    .font(AppFont.rowLabelEmphasized)
                     .lineLimit(1)
                     .padding(.horizontal, 8)
                     .frame(width: HistoryColumnMetrics.authorWidth, alignment: .leading)
@@ -793,7 +1378,7 @@ private struct VirtualizedHistoryRow: View {
             if visibility.showsDate {
                 columnDivider
                 Text(CommitDateFormatter.string(from: row.commit.committerDate))
-                    .font(.system(size: 11))
+                    .font(AppFont.rowLabel)
                     .foregroundStyle(isSelected ? Color.primary : .secondary)
                     .lineLimit(1)
                     .padding(.horizontal, 8)
@@ -802,6 +1387,7 @@ private struct VirtualizedHistoryRow: View {
         }
         .frame(maxWidth: .infinity, minHeight: HistoryColumnMetrics.rowHeight, alignment: .leading)
         .background(rowBackground)
+        .appGlassSelection(isSelected)
         .contentShape(Rectangle())
         .animation(
             reduceMotion ? nil : .easeOut(duration: 0.12),
@@ -811,17 +1397,39 @@ private struct VirtualizedHistoryRow: View {
 
     private var rowBackground: Color {
         if isSelected {
-            return Color.accentColor.opacity(0.18)
+            return .clear
         }
         if rowIndex.isMultiple(of: 2) {
-            return Color(nsColor: .controlBackgroundColor).opacity(0.58)
+            return AppColor.zebraStripe
         }
         return .clear
     }
 
+    private var graphAccessibilityValue: String {
+        let commit = row.commit
+        if commit.isWorkingTree {
+            return "커밋되지 않은 작업 트리 변경 사항, \(row.graph.nodeLane + 1)번 레인"
+        }
+        if commit.isHead {
+            return "현재 HEAD 커밋, \(row.graph.nodeLane + 1)번 레인"
+        }
+        if row.graph.isBranchPoint {
+            return "브랜치 \(row.graph.incomingLanes.count)개가 갈라진 기준 커밋, "
+                + "\(row.graph.nodeLane + 1)번 레인"
+        }
+        if commit.parentOIDs.isEmpty {
+            return "루트 커밋, \(row.graph.nodeLane + 1)번 레인"
+        }
+        if commit.parentOIDs.count > 1 {
+            return "부모 \(commit.parentOIDs.count)개를 가진 병합 커밋, "
+                + "\(row.graph.nodeLane + 1)번 레인"
+        }
+        return "일반 커밋, \(row.graph.nodeLane + 1)번 레인"
+    }
+
     private var columnDivider: some View {
         Rectangle()
-            .fill(Color(nsColor: .separatorColor).opacity(0.45))
+            .fill(AppColor.separator.opacity(0.28))
             .frame(width: 1)
     }
 }
@@ -829,8 +1437,8 @@ private struct VirtualizedHistoryRow: View {
 private struct RepositoryHistoryCell: View {
     let commit: GitCommit
     let colorIndex: Int
-    let showsName: Bool
     let isSelected: Bool
+    @Environment(\.colorScheme) private var colorScheme
 
     private var repositoryColor: Color {
         AppPalette.repositoryBackgrounds[colorIndex]
@@ -840,15 +1448,23 @@ private struct RepositoryHistoryCell: View {
         URL(fileURLWithPath: commit.id.repositoryID.rawValue).lastPathComponent
     }
 
+    /// 파스텔 배경은 라이트 모드 기준이라 다크 모드에서는 옅게 깔아 주변 표면과 맞춘다.
+    private var backgroundOpacity: Double {
+        colorScheme == .dark ? 0.20 : 0.74
+    }
+
     var body: some View {
-        Text(showsName ? repositoryName : "")
-            .font(.system(size: 11))
-            .foregroundStyle(Color.black.opacity(0.82))
+        // 모든 행에 전체 저장소 이름을 같은 스타일로 그린다. 연속 행이라고 이름을 줄이거나
+        // 흐리게 하면 읽을 수 없는 표기가 되고, 같은 열에 두 가지 표기가 섞인다.
+        Text(repositoryName)
+            .font(AppFont.rowLabel)
+            .foregroundStyle(.primary)
             .lineLimit(1)
             .padding(.horizontal, 5)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
-            .background(repositoryColor)
+            .background(repositoryColor.opacity(backgroundOpacity))
             .overlay(isSelected ? Color.accentColor.opacity(0.13) : .clear)
+            .help(repositoryName)
             .accessibilityLabel(repositoryName)
     }
 }
@@ -868,7 +1484,7 @@ private struct CommitMessageHistoryCell: View {
                 CommitLocationBadge(
                     title: "작업 중",
                     systemImage: "hammer.fill",
-                    color: .orange,
+                    color: AppStatusColor.warning,
                     isSelected: isSelected
                 )
             }
@@ -892,7 +1508,7 @@ private struct CommitMessageHistoryCell: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .font(.system(size: 11))
+        .font(AppFont.rowLabel)
         .clipped()
     }
 }
@@ -909,7 +1525,7 @@ private struct GitHubActionsHistoryBadge: View {
             isShowingRuns.toggle()
         } label: {
             Image(systemName: GitHubActionsLabels.systemImage(for: summary.state))
-                .font(.system(size: 11, weight: .semibold))
+                .font(AppFont.badge)
                 .foregroundStyle(
                     isSelected
                         ? Color.primary
@@ -924,14 +1540,6 @@ private struct GitHubActionsHistoryBadge: View {
             "GitHub Actions \(GitHubActionsLabels.title(for: summary.state)), "
                 + "\(summary.runs.count)개 워크플로"
         )
-        .onContinuousHover { phase in
-            switch phase {
-            case .active:
-                NSCursor.pointingHand.set()
-            case .ended:
-                NSCursor.arrow.set()
-            }
-        }
         .popover(isPresented: $isShowingRuns, arrowEdge: .trailing) {
             GitHubActionsRunsPopover(
                 summary: summary,
@@ -974,10 +1582,10 @@ private struct GitHubActionsRunsPopover: View {
                 Image(systemName: "bolt.horizontal.circle")
                     .foregroundStyle(.secondary)
                 Text("GitHub Actions")
-                    .font(.system(size: 12, weight: .semibold))
+                    .font(AppFont.paneTitle)
                 Spacer(minLength: 12)
                 Text("\(summary.runs.count)개 워크플로")
-                    .font(.system(size: 10))
+                    .font(AppFont.rowLabel)
                     .foregroundStyle(.secondary)
             }
 
@@ -986,7 +1594,7 @@ private struct GitHubActionsRunsPopover: View {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 4) {
                     Text("워크플로")
-                        .font(.system(size: 9, weight: .medium))
+                        .font(AppFont.metadataTitle)
                         .foregroundStyle(.secondary)
                         .padding(.horizontal, 8)
 
@@ -1004,7 +1612,7 @@ private struct GitHubActionsRunsPopover: View {
                             .padding(.vertical, 4)
 
                         Text("Jobs 및 Checks")
-                            .font(.system(size: 9, weight: .medium))
+                            .font(AppFont.metadataTitle)
                             .foregroundStyle(.secondary)
                             .padding(.horizontal, 8)
 
@@ -1013,7 +1621,7 @@ private struct GitHubActionsRunsPopover: View {
                                 ProgressView()
                                     .controlSize(.mini)
                                 Text("상태를 불러오는 중…")
-                                    .font(.system(size: 10))
+                                    .font(AppFont.rowLabel)
                                     .foregroundStyle(.secondary)
                             }
                             .frame(minHeight: 38)
@@ -1078,12 +1686,12 @@ private struct GitHubActionsStatusLink: View {
 
                 VStack(alignment: .leading, spacing: 2) {
                     Text(title)
-                        .font(.system(size: 11, weight: .medium))
+                        .font(AppFont.rowLabelEmphasized)
                         .foregroundStyle(.primary)
                         .lineLimit(1)
                     if let detail, !detail.isEmpty {
                         Text(detail)
-                            .font(.system(size: 9))
+                            .font(AppFont.rowLabel)
                             .foregroundStyle(.secondary)
                             .lineLimit(1)
                     }
@@ -1092,12 +1700,12 @@ private struct GitHubActionsStatusLink: View {
                 Spacer(minLength: 8)
 
                 Text(GitHubActionsLabels.title(for: state))
-                    .font(.system(size: 9, weight: .medium))
+                    .font(AppFont.badge)
                     .foregroundStyle(GitHubActionsLabels.color(for: state))
 
                 if webURL != nil {
                     Image(systemName: "arrow.up.right.square")
-                        .font(.system(size: 9))
+                        .font(AppFont.decorativeGlyph)
                         .foregroundStyle(.secondary)
                 }
             }
@@ -1156,11 +1764,11 @@ enum GitHubActionsLabels {
 
     static func color(for state: GitHubActionsState) -> Color {
         switch state {
-        case .queued: return .orange
-        case .inProgress: return .blue
-        case .success: return .green
-        case .failure: return .red
-        case .cancelled, .neutral, .unknown: return .secondary
+        case .queued: return AppStatusColor.warning
+        case .inProgress: return AppStatusColor.progress
+        case .success: return AppStatusColor.success
+        case .failure: return AppStatusColor.danger
+        case .cancelled, .neutral, .unknown: return AppStatusColor.neutral
         }
     }
 }
@@ -1176,7 +1784,7 @@ private struct CommitLocationBadge: View {
             Image(systemName: systemImage)
             Text(title)
         }
-        .font(.system(size: 9, weight: .semibold))
+        .font(AppFont.badge)
         .foregroundStyle(isSelected ? Color.primary : color)
         .padding(.horizontal, 5)
         .padding(.vertical, 2)
@@ -1201,11 +1809,11 @@ private struct ReferenceBadge: View {
             Text(reference.shortName)
                 .lineLimit(1)
         }
-        .font(.system(size: 9))
+        .font(AppFont.badge)
         .foregroundStyle(
             isSelected
                 ? Color.primary
-                : reference.kind == .remote ? Color.purple : Color.green
+                : reference.kind == .remote ? AppStatusColor.remote : AppStatusColor.success
         )
     }
 }
@@ -1216,7 +1824,7 @@ private struct CommitReferencesPopover: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 9) {
             Text("브랜치 및 태그")
-                .font(.system(size: 12, weight: .semibold))
+                .font(AppFont.paneTitle)
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 9) {
@@ -1225,15 +1833,15 @@ private struct CommitReferencesPopover: View {
                         if !references.isEmpty {
                             HStack(alignment: .top, spacing: 7) {
                                 Image(systemName: kind == .tag ? "tag" : "point.3.connected.trianglepath.dotted")
-                                    .foregroundStyle(kind == .remote ? Color.purple : Color.green)
+                                    .foregroundStyle(kind == .remote ? AppStatusColor.remote : AppStatusColor.success)
                                     .frame(width: 14)
                                 VStack(alignment: .leading, spacing: 3) {
                                     Text(referenceKindTitle(kind))
-                                        .font(.system(size: 9, weight: .medium))
+                                        .font(AppFont.metadataTitle)
                                         .foregroundStyle(.secondary)
                                     ForEach(references) { reference in
                                         Text(reference.shortName)
-                                            .font(.system(size: 11))
+                                            .font(AppFont.metadataValue)
                                             .textSelection(.enabled)
                                             .fixedSize(horizontal: false, vertical: true)
                                     }
@@ -1244,7 +1852,7 @@ private struct CommitReferencesPopover: View {
 
                     if commit.references.isEmpty {
                         Text("연결된 브랜치 또는 태그가 없습니다.")
-                            .font(.system(size: 11))
+                            .font(AppFont.rowLabel)
                             .foregroundStyle(.secondary)
                     }
                 }
@@ -1265,7 +1873,7 @@ private struct CommitReferencesPopover: View {
                 Spacer(minLength: 0)
             }
             .buttonStyle(.borderless)
-            .font(.system(size: 11))
+            .font(AppFont.rowLabel)
         }
         .padding(12)
         .frame(width: 360, alignment: .leading)

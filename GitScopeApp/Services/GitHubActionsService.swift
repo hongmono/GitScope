@@ -130,6 +130,7 @@ actor GitHubActionsService {
     func loadWorkflowSummaries(
         repository: GitRepository
     ) async throws -> [CommitID: GitHubActionsSummary] {
+        guard AppSettings.isGitHubActionsEnabled else { return [:] }
         guard let githubRepository = repository.githubRepository else { return [:] }
 
         var components = URLComponents(
@@ -216,6 +217,7 @@ actor GitHubActionsService {
         repository githubRepository: GitHubRepository,
         commitSHA: String
     ) async throws -> [GitHubCheckRun] {
+        guard AppSettings.isGitHubActionsEnabled else { return [] }
         var components = URLComponents(
             url: githubRepository.apiURL
                 .appending(path: "commits")

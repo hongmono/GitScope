@@ -10,7 +10,7 @@ struct CommitDetailsView: View {
             changedFilesPane
             diffPane
         }
-        .background(Color(nsColor: .textBackgroundColor))
+        .background(.clear)
         .animation(
             reduceMotion ? nil : .easeOut(duration: 0.14),
             value: model.selectedCommit?.id
@@ -27,7 +27,11 @@ struct CommitDetailsView: View {
             Divider()
 
             if model.selectedCommit == nil {
-                DetailsPlaceholder(text: "변경 사항을 확인할 커밋 선택")
+                InspectorUnavailableView(
+                    title: "변경 사항을 확인할 커밋 선택",
+                    systemImage: "doc.on.doc",
+                    description: "히스토리에서 커밋을 고르면 변경된 파일 목록이 표시됩니다."
+                )
             } else if model.isLoadingDetails {
                 ProgressView()
                     .controlSize(.small)
@@ -37,7 +41,11 @@ struct CommitDetailsView: View {
                     CommitSummary(commit: details.commit)
                     Divider()
                     if details.files.isEmpty {
-                        DetailsPlaceholder(text: "변경된 파일이 없습니다")
+                        InspectorUnavailableView(
+                            title: "변경된 파일이 없습니다",
+                            systemImage: "tray",
+                            description: "이 커밋은 파일 내용을 바꾸지 않았습니다."
+                        )
                     } else {
                         ScrollView {
                             LazyVStack(spacing: 0) {
@@ -46,42 +54,38 @@ struct CommitDetailsView: View {
                                         model.selectChangedFile(file)
                                     } label: {
                                         HStack(spacing: 7) {
+                                            // rename/copy 는 "R100" 처럼 4글자라 11pt 고정폭 기준
+                                            // 약 27pt 가 필요하다. 좁으면 두 줄로 접혀 25pt 행 리듬이 깨진다.
                                             Text(file.status)
-                                                .font(.system(size: 10, weight: .bold, design: .monospaced))
+                                                .font(AppFont.badgeMono)
                                                 .foregroundStyle(statusColor(file.status))
-                                                .frame(width: 18)
+                                                .lineLimit(1)
+                                                .frame(width: 30, alignment: .leading)
                                             Image(systemName: "doc.text")
                                                 .foregroundStyle(.secondary)
                                             Text(file.path)
-                                                .font(.system(size: 11))
+                                                .font(AppFont.rowLabel)
                                                 .lineLimit(1)
                                             Spacer(minLength: 0)
                                         }
                                         .padding(.horizontal, 9)
                                         .frame(maxWidth: .infinity, minHeight: 25, alignment: .leading)
-                                        .background(
-                                            model.selectedFile?.id == file.id
-                                                ? Color.accentColor.opacity(0.14)
-                                                : .clear
-                                        )
+                                        .appGlassSelection(model.selectedFile?.id == file.id)
+                                        .padding(.horizontal, 5)
                                         .contentShape(Rectangle())
                                     }
                                     .buttonStyle(.plain)
-                                    .onContinuousHover { phase in
-                                        switch phase {
-                                        case .active:
-                                            NSCursor.pointingHand.set()
-                                        case .ended:
-                                            NSCursor.arrow.set()
-                                        }
-                                    }
                                 }
                             }
                         }
                     }
                 }
             } else {
-                DetailsPlaceholder(text: "커밋 정보를 불러오지 못했습니다")
+                InspectorUnavailableView(
+                    title: "커밋 정보를 불러오지 못했습니다",
+                    systemImage: "exclamationmark.triangle",
+                    description: "다른 커밋을 선택하거나 저장소를 새로 고쳐 주세요."
+                )
             }
         }
     }
@@ -102,7 +106,11 @@ struct CommitDetailsView: View {
                     isLoadingGitHubChecks: model.isLoadingSelectedGitHubChecks
                 )
             } else if model.selectedCommit == nil {
-                DetailsPlaceholder(text: "커밋 세부 정보")
+                InspectorUnavailableView(
+                    title: "커밋 세부 정보",
+                    systemImage: "text.alignleft",
+                    description: "커밋을 선택하면 메시지와 메타데이터가 여기에 표시됩니다."
+                )
             } else if model.isLoadingPatch {
                 ProgressView()
                     .controlSize(.small)
@@ -110,16 +118,20 @@ struct CommitDetailsView: View {
             } else if let patch = model.selectedPatch, !patch.isEmpty {
                 DiffView(patch: patch)
             } else {
-                DetailsPlaceholder(text: "표시할 diff가 없습니다")
+                InspectorUnavailableView(
+                    title: "표시할 diff가 없습니다",
+                    systemImage: "doc.plaintext",
+                    description: "바이너리 파일이거나 내용 변경이 없는 파일입니다."
+                )
             }
         }
     }
 
     private func statusColor(_ status: String) -> Color {
-        if status.hasPrefix("A") { return .green }
-        if status.hasPrefix("D") { return .red }
-        if status.hasPrefix("R") { return .blue }
-        return .orange
+        if status.hasPrefix("A") { return AppStatusColor.success }
+        if status.hasPrefix("D") { return AppStatusColor.danger }
+        if status.hasPrefix("R") { return AppStatusColor.progress }
+        return AppStatusColor.warning
     }
 }
 
@@ -151,12 +163,12 @@ private struct CommitInformationView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
                 Text(commit.subject.isEmpty ? "(메시지 없음)" : commit.subject)
-                    .font(.system(size: 13, weight: .semibold))
+                    .font(AppFont.sectionTitle)
                     .textSelection(.enabled)
 
                 if !messageBody.isEmpty {
                     Text(messageBody)
-                        .font(.system(size: 11))
+                        .font(AppFont.metadataValue)
                         .textSelection(.enabled)
                         .fixedSize(horizontal: false, vertical: true)
                 }
@@ -253,9 +265,9 @@ private struct GitHubActionsDetailsSection: View {
                 Image(systemName: GitHubActionsLabels.systemImage(for: summary.state))
                     .foregroundStyle(GitHubActionsLabels.color(for: summary.state))
                 Text("GitHub Actions")
-                    .font(.system(size: 11, weight: .semibold))
+                    .font(AppFont.badge)
                 Text(GitHubActionsLabels.title(for: summary.state))
-                    .font(.system(size: 10, weight: .medium))
+                    .font(AppFont.rowLabelEmphasized)
                     .foregroundStyle(GitHubActionsLabels.color(for: summary.state))
                 Spacer(minLength: 8)
                 if let url = summary.primaryURL {
@@ -263,7 +275,7 @@ private struct GitHubActionsDetailsSection: View {
                         NSWorkspace.shared.open(url)
                     }
                     .buttonStyle(.link)
-                    .font(.system(size: 10))
+                    .font(AppFont.rowLabel)
                     .onContinuousHover { phase in
                         switch phase {
                         case .active:
@@ -291,13 +303,13 @@ private struct GitHubActionsDetailsSection: View {
                     ProgressView()
                         .controlSize(.mini)
                     Text("Job 상태를 불러오는 중…")
-                        .font(.system(size: 10))
+                        .font(AppFont.rowLabel)
                         .foregroundStyle(.secondary)
                 }
             } else if !checks.isEmpty {
                 Divider()
                 Text("Jobs 및 Checks")
-                    .font(.system(size: 9, weight: .medium))
+                    .font(AppFont.metadataTitle)
                     .foregroundStyle(.secondary)
 
                 VStack(alignment: .leading, spacing: 6) {
@@ -315,11 +327,11 @@ private struct GitHubActionsDetailsSection: View {
         .padding(10)
         .background(
             RoundedRectangle(cornerRadius: 7)
-                .fill(Color(nsColor: .controlBackgroundColor))
+                .fill(AppColor.cardSurface)
         )
         .overlay(
             RoundedRectangle(cornerRadius: 7)
-                .stroke(Color(nsColor: .separatorColor).opacity(0.55), lineWidth: 0.5)
+                .stroke(AppColor.separator.opacity(0.55), lineWidth: 0.5)
         )
     }
 
@@ -350,17 +362,17 @@ private struct GitHubActionsResultRow: View {
                     .foregroundStyle(GitHubActionsLabels.color(for: state))
                     .frame(width: 13)
                 Text(title)
-                    .font(.system(size: 10.5, weight: .medium))
+                    .font(AppFont.rowLabelEmphasized)
                     .lineLimit(1)
                 if let detail, !detail.isEmpty {
                     Text(detail)
-                        .font(.system(size: 9.5))
+                        .font(AppFont.rowLabel)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                 }
                 Spacer(minLength: 4)
                 Text(GitHubActionsLabels.title(for: state))
-                    .font(.system(size: 9))
+                    .font(AppFont.rowLabel)
                     .foregroundStyle(GitHubActionsLabels.color(for: state))
             }
             .contentShape(Rectangle())
@@ -391,10 +403,10 @@ private struct CommitMetadataRow: View {
                 .frame(width: 14)
             VStack(alignment: .leading, spacing: 3) {
                 Text(title)
-                    .font(.system(size: 9, weight: .medium))
+                    .font(AppFont.metadataTitle)
                     .foregroundStyle(.secondary)
                 Text(value)
-                    .font(.system(size: 10.5, design: monospaced ? .monospaced : .default))
+                    .font(monospaced ? AppFont.monoSmall : AppFont.metadataValue)
                     .textSelection(.enabled)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -411,12 +423,16 @@ private struct PaneHeader: View {
             Image(systemName: systemImage)
                 .foregroundStyle(.secondary)
             Text(title)
-                .font(.system(size: 11, weight: .semibold))
-            Spacer()
+                .font(AppFont.paneTitle)
+                .lineLimit(1)
+                .truncationMode(.middle)
+            Spacer(minLength: 0)
         }
-        .padding(.horizontal, 9)
-        .frame(height: 28)
-        .background(Color(nsColor: .controlBackgroundColor))
+        .padding(.horizontal, 10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(height: 30)
+        // 인스펙터는 시스템이 자체 배경을 깔아준다. 여기에 띠 채움을 더하면 이중 배경이 되고,
+        // 위아래 두 헤더가 인스펙터 폭에서 두 줄의 회색 띠로 보인다. 구분은 아래 `Divider()` 가 맡는다.
     }
 }
 
@@ -426,12 +442,12 @@ private struct CommitSummary: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 7) {
             Text(commit.subject)
-                .font(.system(size: 12, weight: .semibold))
+                .font(AppFont.sectionTitle)
                 .textSelection(.enabled)
             if commit.isWorkingTree {
                 HStack(spacing: 6) {
                     Image(systemName: "hammer.fill")
-                        .foregroundStyle(.orange)
+                        .foregroundStyle(AppStatusColor.warning)
                     Text("현재 작업 트리")
                     Spacer()
                 }
@@ -446,26 +462,50 @@ private struct CommitSummary: View {
                 HStack(spacing: 6) {
                     Image(systemName: commit.isHead ? "location.fill" : "number")
                     Text(commit.isHead ? "HEAD · \(commit.id.oid)" : commit.id.oid)
-                        .font(.system(size: 10, design: .monospaced))
+                        .font(AppFont.monoSmall)
                         .textSelection(.enabled)
                 }
                 .foregroundStyle(commit.isHead ? Color.accentColor : .secondary)
             }
         }
-        .font(.system(size: 10))
+        .font(AppFont.rowLabel)
         .padding(10)
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
-private struct DetailsPlaceholder: View {
-    let text: String
+/// 좁은 인스펙터 폭(약 300pt)에 맞춘 빈 상태.
+///
+/// `ContentUnavailableView` 의 기본 타이포 스케일은 창 전체를 차지하는 빈 상태 기준이라,
+/// 상세 패널에 두 개가 위아래로 쌓이면 제목이 두 줄로 접히며 패널을 압도한다. 레이블 폰트만
+/// 낮춰 네이티브 컴포넌트를 그대로 쓰는 방법은 실제 패널 높이에서 아이콘이 그려지지 않는
+/// 경우가 있어(같은 코드로 아래 패널은 그려지고 위 패널은 누락) 쓰지 않는다. 아이콘·제목·설명
+/// 3요소가 항상 나오도록 동등한 구조를 직접 쌓고, 크기는 `AppFont` 토큰만 사용한다.
+///
+/// 중앙 히스토리처럼 창 전체 폭을 쓰는 빈 상태는 네이티브 `ContentUnavailableView` 를 유지한다.
+private struct InspectorUnavailableView: View {
+    let title: String
+    let systemImage: String
+    let description: String
 
     var body: some View {
-        Text(text)
-            .font(.system(size: 11))
-            .foregroundStyle(.secondary)
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        VStack(spacing: 6) {
+            Image(systemName: systemImage)
+                .font(AppFont.loadingGlyph)
+                .foregroundStyle(.secondary)
+                .accessibilityHidden(true)
+                .padding(.bottom, 2)
+            Text(title)
+                .font(AppFont.sectionTitle)
+                .multilineTextAlignment(.center)
+            Text(description)
+                .font(AppFont.rowLabel)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+        }
+        .padding(.horizontal, 16)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .accessibilityElement(children: .combine)
     }
 }
 
@@ -474,6 +514,8 @@ private struct DiffView: View {
         let id: Int
         let text: String
     }
+
+    @Environment(\.colorScheme) private var colorScheme
 
     private let lines: [DiffLine]
 
@@ -489,7 +531,7 @@ private struct DiffView: View {
                 LazyVStack(alignment: .leading, spacing: 0) {
                     ForEach(lines) { line in
                         Text(line.text.isEmpty ? " " : line.text)
-                            .font(.system(size: 10.5, design: .monospaced))
+                            .font(AppFont.monoSmall)
                             .foregroundStyle(foreground(for: line.text))
                             .padding(.horizontal, 7)
                             .frame(minWidth: 900, minHeight: 17, alignment: .leading)
@@ -503,6 +545,9 @@ private struct DiffView: View {
                     alignment: .topLeading
                 )
             }
+            // 인스펙터 아래 칸을 꽉 채우는 코드 캔버스. 카드 시절의 5pt 인셋과 둥근 모서리를
+            // 없애고 평평한 텍스트 배경만 남겨 인스펙터 배경과 톤이 겹치지 않게 한다.
+            .background(AppColor.contentSurface)
         }
     }
 
@@ -510,15 +555,24 @@ private struct DiffView: View {
         if line.hasPrefix("+++") || line.hasPrefix("---") || line.hasPrefix("@@") {
             return .secondary
         }
-        if line.hasPrefix("+") { return Color(red: 0.10, green: 0.45, blue: 0.20) }
-        if line.hasPrefix("-") { return Color(red: 0.72, green: 0.18, blue: 0.16) }
+        if line.hasPrefix("+") { return AppStatusColor.success }
+        if line.hasPrefix("-") { return AppStatusColor.danger }
         return .primary
     }
 
     private func background(for line: String) -> Color {
-        if line.hasPrefix("@@") { return Color.blue.opacity(0.08) }
-        if line.hasPrefix("+") && !line.hasPrefix("+++") { return Color.green.opacity(0.10) }
-        if line.hasPrefix("-") && !line.hasPrefix("---") { return Color.red.opacity(0.09) }
+        if line.hasPrefix("@@") { return AppStatusColor.progressFill.opacity(highlightOpacity) }
+        if line.hasPrefix("+") && !line.hasPrefix("+++") {
+            return AppStatusColor.successFill.opacity(highlightOpacity)
+        }
+        if line.hasPrefix("-") && !line.hasPrefix("---") {
+            return AppStatusColor.dangerFill.opacity(highlightOpacity)
+        }
         return .clear
+    }
+
+    /// 다크에서는 바탕이 거의 검정이어서 라이트와 같은 불투명도로는 하이라이트가 보이지 않는다.
+    private var highlightOpacity: Double {
+        colorScheme == .dark ? 0.16 : 0.085
     }
 }

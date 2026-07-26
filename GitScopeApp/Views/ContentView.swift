@@ -1,5 +1,137 @@
 import SwiftUI
 
+enum AppGlassDesign {
+    static let controlCornerRadius: CGFloat = 8
+
+    /// `tint` 는 반드시 원색으로 넘긴다. 아래 세 값이 유일한 불투명도 적용 지점이며,
+    /// 호출부에서 미리 흐리게 만든 색을 넘기면 불투명도가 두 번 곱해져 선택 상태가 사라진다.
+    static let tintFillOpacity: Double = 0.22
+    static let tintGlassOpacity: Double = 0.25
+    static let tintStrokeOpacity: Double = 0.55
+}
+
+private struct AppGlassSurfaceModifier: ViewModifier {
+    let cornerRadius: CGFloat
+    let tint: Color?
+    let interactive: Bool
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if #available(macOS 26.0, *) {
+            content
+                .background(
+                    fillColor,
+                    in: RoundedRectangle(
+                        cornerRadius: cornerRadius,
+                        style: .continuous
+                    )
+                )
+                .glassEffect(
+                    Glass.regular
+                        .tint(tint?.opacity(AppGlassDesign.tintGlassOpacity))
+                        .interactive(interactive),
+                    in: RoundedRectangle(
+                        cornerRadius: cornerRadius,
+                        style: .continuous
+                    )
+                )
+                .overlay {
+                    RoundedRectangle(
+                        cornerRadius: cornerRadius,
+                        style: .continuous
+                    )
+                    .strokeBorder(
+                        strokeColor,
+                        lineWidth: 0.5
+                    )
+                }
+        } else {
+            content
+                .background(
+                    fillColor,
+                    in: RoundedRectangle(
+                        cornerRadius: cornerRadius,
+                        style: .continuous
+                    )
+                )
+                .background(
+                    .regularMaterial,
+                    in: RoundedRectangle(
+                        cornerRadius: cornerRadius,
+                        style: .continuous
+                    )
+                )
+                .overlay {
+                    RoundedRectangle(
+                        cornerRadius: cornerRadius,
+                        style: .continuous
+                    )
+                    .strokeBorder(
+                        strokeColor,
+                        lineWidth: 0.5
+                    )
+                }
+        }
+    }
+
+    private var fillColor: Color {
+        tint?.opacity(AppGlassDesign.tintFillOpacity) ?? AppColor.subtleFill
+    }
+
+    private var strokeColor: Color {
+        tint?.opacity(AppGlassDesign.tintStrokeOpacity) ?? AppColor.surfaceStroke
+    }
+}
+
+extension View {
+    func appGlassSurface(
+        cornerRadius: CGFloat = AppGlassDesign.controlCornerRadius,
+        tint: Color? = nil,
+        interactive: Bool = false
+    ) -> some View {
+        modifier(
+            AppGlassSurfaceModifier(
+                cornerRadius: cornerRadius,
+                tint: tint,
+                interactive: interactive
+            )
+        )
+    }
+
+    func appGlassControl(
+        tint: Color? = nil,
+        interactive: Bool = true
+    ) -> some View {
+        appGlassSurface(
+            cornerRadius: AppGlassDesign.controlCornerRadius,
+            tint: tint,
+            interactive: interactive
+        )
+        .background(
+            AppColor.controlFill,
+            in: RoundedRectangle(
+                cornerRadius: AppGlassDesign.controlCornerRadius,
+                style: .continuous
+            )
+        )
+    }
+
+    @ViewBuilder
+    func appGlassSelection(
+        _ isSelected: Bool,
+        tint: Color = .accentColor
+    ) -> some View {
+        if isSelected {
+            appGlassControl(
+                tint: tint,
+                interactive: true
+            )
+        } else {
+            self
+        }
+    }
+}
+
 struct ContentView: View {
     @ObservedObject var model: AppModel
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -10,33 +142,50 @@ struct ContentView: View {
             : .timingCurve(0.23, 1, 0.32, 1, duration: 0.18)
     }
 
-    var body: some View {
-        VStack(spacing: 0) {
-            ToolWindowTabs(model: model)
-            Divider()
-
-            ZStack {
-                if model.workspaceURLs.isEmpty && model.isLoadingWorkspace {
-                    InitialWorkspaceLoadingView()
-                        .transition(.opacity)
-                } else if model.workspaceURLs.isEmpty {
-                    WelcomeView(model: model)
-                        .transition(.opacity)
-                } else {
-                    workspaceContent
-                        .id(model.activeWorkspaceTabID)
-                        .transition(.opacity)
-
-                    if model.isLoadingWorkspace {
-                        WorkspaceLoadingOverlay()
-                            .transition(.opacity)
-                    }
+    /// 사이드바 표시 여부의 단일 원본은 모델의 Bool 이다. 네이티브 분할선으로 사이드바를
+    /// 접었을 때도 `⌘B` 메뉴 문구가 어긋나지 않도록 별도 `@State` 없이 양방향으로 변환한다.
+    private var branchColumnVisibility: Binding<NavigationSplitViewVisibility> {
+        Binding(
+            get: { model.isBranchSidebarVisible ? .doubleColumn : .detailOnly },
+            set: { visibility in
+                let isVisible = visibility != .detailOnly
+                if model.isBranchSidebarVisible != isVisible {
+                    model.isBranchSidebarVisible = isVisible
                 }
             }
-            .animation(stateAnimation, value: model.isLoadingWorkspace)
-            .animation(stateAnimation, value: model.workspaceURLs)
+        )
+    }
+
+    var body: some View {
+        Group {
+            if model.workspaceURLs.isEmpty && model.isLoadingWorkspace {
+                InitialWorkspaceLoadingView()
+                    .transition(.opacity)
+            } else if model.workspaceURLs.isEmpty {
+                WelcomeView(model: model)
+                    .transition(.opacity)
+            } else {
+                workspaceSplitView
+                    .transition(.opacity)
+            }
         }
-        .background(Color(nsColor: .windowBackgroundColor))
+        .animation(stateAnimation, value: model.isLoadingWorkspace)
+        .animation(stateAnimation, value: model.workspaceURLs)
+        .toolbar {
+            ToolbarItem(placement: .navigation) {
+                WorkspaceToolbarTabs(model: model)
+            }
+
+            // 저장소 상태·액션은 창 오른쪽 끝에 붙인다. 유연한 간격이 없으면 두 그룹이
+            // 모두 왼쪽으로 몰려 탭 바로 옆에 붙는다.
+            ToolbarItem(placement: .navigation) {
+                Spacer()
+            }
+
+            ToolbarItem(placement: .primaryAction) {
+                WorkspaceToolbarActions(model: model)
+            }
+        }
         .onAppear {
             model.restoreWorkspaceIfNeeded()
         }
@@ -55,19 +204,26 @@ struct ContentView: View {
         }
     }
 
-    private var workspaceContent: some View {
-        HSplitView {
-            if model.isBranchSidebarVisible {
-                BranchSidebarView(model: model)
-                    .frame(minWidth: 235, idealWidth: 285, maxWidth: 380)
-            }
-
+    /// 워크스페이스 탭을 바꾸면 세 열의 내용은 새로 만들되, 사용자가 분할선으로 조절한
+    /// 열 너비는 유지해야 하므로 `id` 를 split view 가 아니라 각 열 내용에 건다.
+    private var workspaceSplitView: some View {
+        NavigationSplitView(columnVisibility: branchColumnVisibility) {
+            BranchSidebarView(model: model)
+                .navigationSplitViewColumnWidth(min: 250, ideal: 285, max: 420)
+                .id(model.activeWorkspaceTabID)
+        } detail: {
             HistoryView(model: model)
-                .frame(minWidth: 650, idealWidth: 900)
-
-            if model.isCommitDetailsVisible {
-                CommitDetailsView(model: model)
-                    .frame(minWidth: 300, idealWidth: 480)
+                .id(model.activeWorkspaceTabID)
+        }
+        .inspector(isPresented: $model.isCommitDetailsVisible) {
+            CommitDetailsView(model: model)
+                .inspectorColumnWidth(min: 300, ideal: 340, max: 500)
+                .id(model.activeWorkspaceTabID)
+        }
+        .overlay {
+            if model.isLoadingWorkspace {
+                WorkspaceLoadingOverlay()
+                    .transition(.opacity)
             }
         }
     }
@@ -81,15 +237,15 @@ private struct InitialWorkspaceLoadingView: View {
                     .fill(Color.accentColor.opacity(0.10))
                     .frame(width: 58, height: 58)
                 Image(systemName: "point.3.connected.trianglepath.dotted")
-                    .font(.system(size: 28, weight: .light))
+                    .font(AppFont.loadingGlyph)
                     .foregroundStyle(Color.accentColor)
             }
 
             VStack(spacing: 5) {
                 Text("Git 로그를 불러오는 중")
-                    .font(.system(size: 16, weight: .semibold))
+                    .font(AppFont.loadingTitle)
                 Text("저장소와 브랜치를 확인하고 커밋 그래프를 구성하고 있습니다.")
-                    .font(.system(size: 12))
+                    .font(AppFont.loadingBody)
                     .foregroundStyle(.secondary)
             }
 
@@ -106,21 +262,21 @@ private struct InitialWorkspaceLoadingView: View {
 private struct WorkspaceLoadingOverlay: View {
     var body: some View {
         ZStack {
-            Color(nsColor: .windowBackgroundColor)
+            AppColor.windowBackground
                 .opacity(0.36)
 
             HStack(spacing: 10) {
                 ProgressView()
                     .controlSize(.small)
                 Text("Git 로그 업데이트 중…")
-                    .font(.system(size: 12, weight: .medium))
+                    .font(AppFont.loadingBody.weight(.medium))
             }
             .padding(.horizontal, 16)
             .frame(height: 42)
             .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10))
             .overlay(
                 RoundedRectangle(cornerRadius: 10)
-                    .stroke(Color(nsColor: .separatorColor).opacity(0.55), lineWidth: 0.5)
+                    .stroke(AppColor.separator.opacity(0.55), lineWidth: 0.5)
             )
             .shadow(color: .black.opacity(0.12), radius: 12, y: 5)
         }
@@ -130,32 +286,19 @@ private struct WorkspaceLoadingOverlay: View {
     }
 }
 
-private struct ToolWindowTabs: View {
+private struct WorkspaceToolbarTabs: View {
     @ObservedObject var model: AppModel
     @State private var tabContentWidth: CGFloat = 640
 
-    private let maximumTabContentWidth: CGFloat = 640
+    private let maximumTabContentWidth: CGFloat = 560
 
+    /// 사이드바 토글은 `NavigationSplitView` 가 툴바에 기본 제공하므로 따로 두지 않는다.
+    ///
+    /// 이 HStack 에 `fixedSize(horizontal:)` 를 걸면 안 된다. 탭 스크롤 영역의 `minWidth: 0` 이
+    /// 무시되고 최대 560pt 를 그대로 요구해, 툴바 고유 너비가 창 최소 너비를 220pt 넘게
+    /// 밀어올린다. 그러면 좁은 창에서 사이드바 내용이 왼쪽으로 잘린다.
     var body: some View {
         HStack(spacing: 4) {
-            Button {
-                model.isBranchSidebarVisible.toggle()
-            } label: {
-                Image(systemName: "sidebar.leading")
-                    .foregroundStyle(
-                        model.isBranchSidebarVisible ? Color.accentColor : .secondary
-                    )
-            }
-            .buttonStyle(.plain)
-            .help(
-                model.isBranchSidebarVisible
-                    ? "브랜치 사이드바 숨기기 (⌘B)"
-                    : "브랜치 사이드바 보기 (⌘B)"
-            )
-            .accessibilityLabel(
-                model.isBranchSidebarVisible ? "브랜치 사이드바 숨기기" : "브랜치 사이드바 보기"
-            )
-
             if !model.workspaceTabs.isEmpty {
                 ScrollView(.horizontal) {
                     HStack(spacing: 4) {
@@ -201,26 +344,37 @@ private struct ToolWindowTabs: View {
                 Image(systemName: "plus")
             }
             .buttonStyle(.plain)
+            .frame(width: 26, height: 26)
+            .contentShape(Rectangle())
             .disabled(model.remoteOperation != nil)
             .help("워크스페이스 열기 (⌘O)")
+            .accessibilityLabel("워크스페이스 열기")
+        }
+        .font(AppFont.toolbarControl)
+        .padding(.horizontal, 6)
+    }
+}
 
-            Spacer()
+private struct WorkspaceToolbarActions: View {
+    @ObservedObject var model: AppModel
 
+    var body: some View {
+        HStack(spacing: 7) {
             if model.repositories.count > 1 {
                 Text("\(model.repositories.count)개 저장소")
-                    .font(.system(size: 11))
+                    .font(AppFont.rowLabel)
                     .foregroundStyle(.secondary)
+                    .padding(.horizontal, 6)
             }
 
             if model.isLoading {
                 ProgressView()
                     .controlSize(.small)
-                    .padding(.horizontal, 6)
             }
 
             if let notice = model.githubActionsNotice {
                 Image(systemName: "exclamationmark.triangle.fill")
-                    .foregroundStyle(.orange)
+                    .foregroundStyle(AppStatusColor.warning)
                     .help(notice)
                     .accessibilityLabel("GitHub Actions 정보를 불러오지 못함")
             }
@@ -231,8 +385,8 @@ private struct ToolWindowTabs: View {
                 } label: {
                     Image(systemName: "bolt.horizontal.circle")
                 }
-                .buttonStyle(.plain)
                 .help("GitHub Actions 상태 새로고침")
+                .accessibilityLabel("GitHub Actions 상태 새로고침")
             }
 
             Button {
@@ -240,19 +394,20 @@ private struct ToolWindowTabs: View {
             } label: {
                 Image(systemName: "arrow.clockwise")
             }
-            .buttonStyle(.plain)
             .disabled(model.repositories.isEmpty || model.isLoading)
             .help("모든 원격 저장소 가져오기 (⌘R)")
+            .accessibilityLabel("모든 원격 저장소 가져오기")
 
             Button {
-                model.isCommitDetailsVisible.toggle()
+                withAnimation(AppMotion.pane) {
+                    model.isCommitDetailsVisible.toggle()
+                }
             } label: {
                 Image(systemName: "sidebar.trailing")
                     .foregroundStyle(
                         model.isCommitDetailsVisible ? Color.accentColor : .secondary
                     )
             }
-            .buttonStyle(.plain)
             .help(
                 model.isCommitDetailsVisible
                     ? "커밋 상세 숨기기 (⇧⌘B)"
@@ -262,10 +417,9 @@ private struct ToolWindowTabs: View {
                 model.isCommitDetailsVisible ? "커밋 상세 숨기기" : "커밋 상세 보기"
             )
         }
-        .font(.system(size: 12))
-        .padding(.horizontal, 10)
-        .frame(height: 34)
-        .background(Color(nsColor: .controlBackgroundColor))
+        .buttonStyle(.borderless)
+        .controlSize(.small)
+        .padding(.horizontal, 6)
     }
 }
 
@@ -291,7 +445,7 @@ private struct WorkspaceTabItem: View {
                     Image(systemName: "folder")
                         .foregroundStyle(isSelected ? Color.accentColor : .secondary)
                     Text(tab.title)
-                        .font(.system(size: 11, weight: isSelected ? .semibold : .regular))
+                        .font(AppFont.tabTitle.weight(isSelected ? .semibold : .regular))
                         .lineLimit(1)
                 }
             }
@@ -300,35 +454,27 @@ private struct WorkspaceTabItem: View {
 
             Button(action: onClose) {
                 Image(systemName: "xmark")
-                    .font(.system(size: 8, weight: .semibold))
+                    .font(AppFont.decorativeGlyph)
                     .foregroundStyle(.secondary)
-                    .frame(width: 15, height: 15)
+                    .frame(width: 20, height: 20)
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
             .disabled(isDisabled)
             .help("탭 닫기")
+            .accessibilityLabel("\(tab.title) 탭 닫기")
         }
         .padding(.leading, 8)
         .padding(.trailing, 4)
-        .frame(minWidth: 90, maxWidth: 180, minHeight: 26)
-        .background(
-            RoundedRectangle(cornerRadius: 5)
+        .frame(minWidth: 84, maxWidth: 170, minHeight: 24)
+        .background {
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
                 .fill(
                     isSelected
-                        ? Color(nsColor: .selectedControlColor).opacity(0.16)
-                        : Color.clear
+                        ? AppColor.selectionFill
+                        : AppColor.subtleFill
                 )
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 5)
-                .stroke(
-                    isSelected
-                        ? Color(nsColor: .separatorColor).opacity(0.6)
-                        : Color.clear,
-                    lineWidth: 0.5
-                )
-        )
+        }
         .help(tab.subtitle)
     }
 }
@@ -339,12 +485,12 @@ private struct WelcomeView: View {
     var body: some View {
         VStack(spacing: 14) {
             Image(systemName: "point.3.connected.trianglepath.dotted")
-                .font(.system(size: 42, weight: .light))
+                .font(AppFont.emptyStateGlyph)
                 .foregroundStyle(.secondary)
             Text("Git 워크스페이스를 열어주세요")
-                .font(.system(size: 18, weight: .semibold))
+                .font(AppFont.emptyStateTitle)
             Text("선택한 폴더와 하위 폴더의 Git 저장소를 한 화면에 표시합니다.")
-                .font(.system(size: 13))
+                .font(AppFont.emptyStateBody)
                 .foregroundStyle(.secondary)
             Button("워크스페이스 열기…") {
                 model.openWorkspace()

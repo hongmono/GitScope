@@ -16,6 +16,9 @@ enum CommitGraphLayout {
             let incomingPathIDs = Set(incomingLanes.map { topPaths[$0].id })
             var bottomPaths = topPaths.filter { !incomingPathIDs.contains($0.id) }
             let nodeTopLane = incomingLanes.first
+            let inheritedNodeColor = nodeTopLane.map {
+                topPaths[$0].colorIndex
+            }
             let parentInsertionLane = nodeTopLane.map { lane in
                 topPaths.indices.prefix(lane).filter {
                     !incomingPathIDs.contains(topPaths[$0].id)
@@ -29,7 +32,10 @@ enum CommitGraphLayout {
                 guard visibleCommitIDs.contains(parentID) else { continue }
                 let path = ActivePath(
                     id: nextPathID,
-                    target: parentID
+                    target: parentID,
+                    colorIndex: newParentPaths.isEmpty
+                        ? (inheritedNodeColor ?? nextPathID)
+                        : nextPathID
                 )
                 nextPathID += 1
                 newParentPaths.append(path)
@@ -56,15 +62,25 @@ enum CommitGraphLayout {
                 }
                 return GraphLaneConnection(
                     incomingLane: topLane,
-                    outgoingLane: bottomLane
+                    outgoingLane: bottomLane,
+                    colorIndex: path.colorIndex
                 )
+            }
+            let incomingColorIndices = incomingLanes.map {
+                topPaths[$0].colorIndex
             }
             let parentLanes = parentPathIDs.compactMap {
                 bottomLanesByPathID[$0]
             }
+            let parentColorIndices = parentLanes.map {
+                bottomPaths[$0].colorIndex
+            }
             let nodeLane = nodeTopLane
                 ?? parentLanes.first
                 ?? bottomPaths.count
+            let nodeColorIndex = inheritedNodeColor
+                ?? parentColorIndices.first
+                ?? nodeLane
             let highestLane = max(
                 nodeLane,
                 max(
@@ -82,9 +98,12 @@ enum CommitGraphLayout {
                     commit: commit,
                     graph: GraphRowLayout(
                         nodeLane: nodeLane,
+                        nodeColorIndex: nodeColorIndex,
                         incomingLanes: incomingLanes,
+                        incomingColorIndices: incomingColorIndices,
                         passThroughConnections: passThroughConnections,
                         parentLanes: parentLanes,
+                        parentColorIndices: parentColorIndices,
                         laneCount: highestLane + 1
                     )
                 )
@@ -98,5 +117,6 @@ enum CommitGraphLayout {
     private struct ActivePath {
         let id: Int
         let target: CommitID
+        let colorIndex: Int
     }
 }
