@@ -1,4 +1,4 @@
 interface:
   display_name: "GitScope Release"
-  short_description: "Commit, document, and deploy GitScope safely"
-  default_prompt: "Use $gitscope-release to update release notes, split and commit GitScope changes, push main, and deploy."
+  short_description: "Commit, document, update the site, and deploy GitScope"
+  default_prompt: "Use $gitscope-release to review homepage impact, update release notes, split and commit GitScope changes, push main, and deploy every affected target."
