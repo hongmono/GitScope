@@ -142,12 +142,18 @@ private struct ToolWindowTabs: View {
                 model.isBranchSidebarVisible.toggle()
             } label: {
                 Image(systemName: "sidebar.leading")
+                    .foregroundStyle(
+                        model.isBranchSidebarVisible ? Color.accentColor : .secondary
+                    )
             }
             .buttonStyle(.plain)
             .help(
                 model.isBranchSidebarVisible
                     ? "브랜치 사이드바 숨기기 (⌘B)"
                     : "브랜치 사이드바 보기 (⌘B)"
+            )
+            .accessibilityLabel(
+                model.isBranchSidebarVisible ? "브랜치 사이드바 숨기기" : "브랜치 사이드바 보기"
             )
 
             if !model.workspaceTabs.isEmpty {
@@ -242,12 +248,18 @@ private struct ToolWindowTabs: View {
                 model.isCommitDetailsVisible.toggle()
             } label: {
                 Image(systemName: "sidebar.trailing")
+                    .foregroundStyle(
+                        model.isCommitDetailsVisible ? Color.accentColor : .secondary
+                    )
             }
             .buttonStyle(.plain)
             .help(
                 model.isCommitDetailsVisible
                     ? "커밋 상세 숨기기 (⇧⌘B)"
                     : "커밋 상세 보기 (⇧⌘B)"
+            )
+            .accessibilityLabel(
+                model.isCommitDetailsVisible ? "커밋 상세 숨기기" : "커밋 상세 보기"
             )
         }
         .font(.system(size: 12))
