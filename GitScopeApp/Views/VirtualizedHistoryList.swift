@@ -244,8 +244,8 @@ private final class VisibleCommitGraphView: NSView {
                     to: path,
                     fromX: incomingX,
                     toX: outgoingX,
-                    topY: topY,
-                    bottomY: bottomY
+                    fromY: topY,
+                    toY: bottomY
                 )
             }
 
@@ -265,17 +265,12 @@ private final class VisibleCommitGraphView: NSView {
             if incomingLane == layout.nodeLane {
                 path.addLine(to: CGPoint(x: nodeX, y: centerY))
             } else {
-                let verticalSpan = centerY - topY
-                path.addCurve(
-                    to: CGPoint(x: nodeX, y: centerY),
-                    control1: CGPoint(
-                        x: incomingX,
-                        y: topY + verticalSpan * 0.42
-                    ),
-                    control2: CGPoint(
-                        x: nodeX,
-                        y: centerY - verticalSpan * 0.42
-                    )
+                appendLaneTransition(
+                    to: path,
+                    fromX: incomingX,
+                    toX: nodeX,
+                    fromY: topY,
+                    toY: centerY
                 )
             }
 
@@ -297,17 +292,12 @@ private final class VisibleCommitGraphView: NSView {
             if layout.nodeLane == parentLane {
                 path.addLine(to: CGPoint(x: parentX, y: bottomY))
             } else {
-                let verticalSpan = bottomY - centerY
-                path.addCurve(
-                    to: CGPoint(x: parentX, y: bottomY),
-                    control1: CGPoint(
-                        x: nodeX,
-                        y: centerY + verticalSpan * 0.42
-                    ),
-                    control2: CGPoint(
-                        x: parentX,
-                        y: bottomY - verticalSpan * 0.42
-                    )
+                appendLaneTransition(
+                    to: path,
+                    fromX: nodeX,
+                    toX: parentX,
+                    fromY: centerY,
+                    toY: bottomY
                 )
             }
 
@@ -321,25 +311,32 @@ private final class VisibleCommitGraphView: NSView {
         }
     }
 
+    /// lane 을 옮겨 가는 연결선을 잇는다. 세로로 흐르다 둥근 모서리로 방향을 바꾼다.
+    ///
+    /// 한 행 안에서 여러 lane 을 건너뛰면 가로 거리가 세로 거리보다 훨씬 길어진다. 이때
+    /// 양 끝을 S 자 곡선으로 이으면 가운데가 눌려 꺾인 선처럼 보이므로, 세로 구간과 가로
+    /// 구간을 각각 유지하고 그 사이만 둥글린다. 두 거리가 비슷하면 모서리 두 개가 맞붙어
+    /// 자연스러운 S 자가 된다.
     private func appendLaneTransition(
         to path: CGMutablePath,
         fromX: CGFloat,
         toX: CGFloat,
-        topY: CGFloat,
-        bottomY: CGFloat
+        fromY: CGFloat,
+        toY: CGFloat
     ) {
-        let verticalSpan = bottomY - topY
-        path.addCurve(
-            to: CGPoint(x: toX, y: bottomY),
-            control1: CGPoint(
-                x: fromX,
-                y: topY + verticalSpan * 0.42
-            ),
-            control2: CGPoint(
-                x: toX,
-                y: bottomY - verticalSpan * 0.42
-            )
+        let midY = (fromY + toY) / 2
+        let radius = min(abs(toX - fromX), abs(toY - fromY)) / 2
+        path.addArc(
+            tangent1End: CGPoint(x: fromX, y: midY),
+            tangent2End: CGPoint(x: toX, y: midY),
+            radius: radius
         )
+        path.addArc(
+            tangent1End: CGPoint(x: toX, y: midY),
+            tangent2End: CGPoint(x: toX, y: toY),
+            radius: radius
+        )
+        path.addLine(to: CGPoint(x: toX, y: toY))
     }
 
     private func stroke(
