@@ -75,7 +75,7 @@ private struct HistoryFilterBar: View {
                 Button("모든 브랜치") { model.selectRepository(nil) }
                 Divider()
                 ForEach(GitReference.Kind.allCases, id: \.self) { kind in
-                    let groups = model.mergedReferenceGroups.filter { $0.kind == kind }
+                    let groups = model.referenceGroupsByKind[kind] ?? []
                     if !groups.isEmpty {
                         Menu(referenceKindTitle(kind)) {
                             ForEach(groups) { group in

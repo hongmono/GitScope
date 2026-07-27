@@ -107,7 +107,7 @@ struct BranchSidebarView: View {
     }
 
     private func filteredReferenceGroups(kind: GitReference.Kind) -> [MergedReferenceGroup] {
-        let groups = model.mergedReferenceGroups.filter { $0.kind == kind }
+        let groups = model.referenceGroupsByKind[kind] ?? []
         guard !normalizedSearch.isEmpty else { return groups }
         return groups.filter { group in
             group.shortName.localizedLowercase.contains(normalizedSearch)

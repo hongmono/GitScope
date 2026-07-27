@@ -8,7 +8,13 @@ final class AppModel: ObservableObject {
     @Published private(set) var activeWorkspaceTabID: WorkspaceTab.ID?
     @Published private(set) var workspaceURLs: [URL] = []
     @Published private(set) var repositories: [GitRepository] = []
-    @Published private(set) var referencesByRepository: [RepositoryID: [GitReference]] = [:]
+    @Published private(set) var referencesByRepository: [RepositoryID: [GitReference]] = [:] {
+        didSet { rebuildReferenceGroups() }
+    }
+    @Published private(set) var availableAuthors: [String] = []
+    @Published private(set) var mergedReferenceGroups: [MergedReferenceGroup] = []
+    /// 사이드바가 섹션마다 전체 목록을 훑지 않도록 종류별로 미리 나눠 둔다.
+    @Published private(set) var referenceGroupsByKind: [GitReference.Kind: [MergedReferenceGroup]] = [:]
     @Published private(set) var visibleRepositoryIDs: Set<RepositoryID> = []
     @Published private(set) var rows: [CommitRow] = []
     @Published private(set) var selectedCommit: GitCommit?
@@ -71,7 +77,9 @@ final class AppModel: ObservableObject {
     private let loader = GitRepositoryLoader()
     private let remoteService = GitRemoteService()
     private let githubActionsService = GitHubActionsService.shared
-    private var allCommits: [GitCommit] = []
+    private var allCommits: [GitCommit] = [] {
+        didSet { rebuildAvailableAuthors() }
+    }
     private var branchMembership: Set<CommitID>?
     private var workspaceTask: Task<Void, Never>?
     private var referenceTask: Task<Void, Never>?
@@ -108,32 +116,46 @@ final class AppModel: ObservableObject {
         }
     }
 
-    var availableAuthors: [String] {
-        Array(Set(allCommits.filter { !$0.isWorkingTree }.map(\.authorName))).sorted()
+    /// 작성자 필터 메뉴에 쓰는 이름 목록.
+    ///
+    /// 계산해서 돌려주면 필터 바를 그릴 때마다 커밋 전체를 훑게 되므로, 커밋 목록이 바뀔 때
+    /// 한 번만 만들어 둔다.
+    private func rebuildAvailableAuthors() {
+        availableAuthors = Array(
+            Set(allCommits.filter { !$0.isWorkingTree }.map(\.authorName))
+        ).sorted()
     }
 
-    var mergedReferenceGroups: [MergedReferenceGroup] {
+    /// 저장소별 ref 를 이름 단위로 묶은 목록.
+    ///
+    /// 사이드바 `body` 는 로컬·원격·태그 섹션마다 이 값을 읽는다. 계산해서 돌려주면 ref 수백
+    /// 개를 그룹핑하고 `localizedStandardCompare` 로 정렬하는 일이 화면을 그릴 때마다 반복되므로,
+    /// `referencesByRepository` 가 바뀔 때 한 번만 만들어 둔다.
+    private func rebuildReferenceGroups() {
         let references = referencesByRepository.values.flatMap { $0 }
-        let grouped = Dictionary(grouping: references) { reference in
+        let groups = Dictionary(grouping: references) { reference in
             "\(reference.kind.rawValue)::\(reference.shortName)"
         }
-        return grouped.values
-            .compactMap { references in
-                guard let first = references.first else { return nil }
-                return MergedReferenceGroup(
-                    kind: first.kind,
-                    shortName: first.shortName,
-                    references: references.sorted {
-                        $0.repositoryID.rawValue < $1.repositoryID.rawValue
-                    }
-                )
-            }
-            .sorted {
-                if $0.kind != $1.kind {
-                    return referenceKindOrder($0.kind) < referenceKindOrder($1.kind)
+        .values
+        .compactMap { references -> MergedReferenceGroup? in
+            guard let first = references.first else { return nil }
+            return MergedReferenceGroup(
+                kind: first.kind,
+                shortName: first.shortName,
+                references: references.sorted {
+                    $0.repositoryID.rawValue < $1.repositoryID.rawValue
                 }
-                return $0.shortName.localizedStandardCompare($1.shortName) == .orderedAscending
+            )
+        }
+        .sorted {
+            if $0.kind != $1.kind {
+                return referenceKindOrder($0.kind) < referenceKindOrder($1.kind)
             }
+            return $0.shortName.localizedStandardCompare($1.shortName) == .orderedAscending
+        }
+
+        mergedReferenceGroups = groups
+        referenceGroupsByKind = Dictionary(grouping: groups, by: \.kind)
     }
 
     var workspaceURL: URL? {
