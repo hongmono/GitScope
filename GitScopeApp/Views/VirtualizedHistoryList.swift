@@ -95,7 +95,13 @@ private final class VisibleCommitGraphView: NSView {
     /// 설정의 '커밋 작성자 아바타 불러오기' 상태. 꺼지면 캐시에 남은 이미지도 쓰지 않는다.
     private var showsRemoteAvatars = AppSettings.isAuthorAvatarLookupEnabled
 
-    private let originX: CGFloat = 12
+    /// 첫 lane 노드의 중심 x.
+    ///
+    /// 노드에 그리는 가장 큰 원은 HEAD 강조 배경(`nodeDiameter + 10`)이다. 그 반지름보다
+    /// 왼쪽 여백이 좁으면 원이 그래프 열 밖으로 나가 잘린다.
+    private var originX: CGFloat {
+        nodeDiameter / 2 + 6
+    }
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
