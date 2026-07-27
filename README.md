@@ -46,6 +46,7 @@ Homebrew를 사용하지 않는 경우 [GitHub Releases](https://github.com/hong
 - GitHub 저장소 커밋의 Actions 상태를 커밋 메시지 오른쪽에 표시
 - Actions 실행 중 자동 갱신, 워크플로 및 Job/Check 결과와 GitHub 링크 제공
 - 메시지/해시 검색, 작성자/기간/저장소 필터
+- 저장소 표시 필터를 탭별로 기억해 앱을 다시 켜도 유지
 - 경로 필터 재조회
 - 변경 파일과 unified diff 표시
 - Git 로그 초기 로딩 화면과 부드러운 상태 전환
