@@ -4,9 +4,12 @@ actor GitRepositoryLoader {
     private let runner = GitCommandRunner()
     private let scanner = RepositoryScanner()
     private let isoFormatter = ISO8601DateFormatter()
+    private let gregorianCalendar = Calendar(identifier: .gregorian)
 
     init() {
-        isoFormatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        // git 이 내는 `%aI` 에는 소수점 초가 없다. `.withFractionalSeconds` 를 켜면 모든
+        // 파싱이 실패해 폴백만 타게 된다.
+        isoFormatter.formatOptions = [.withInternetDateTime]
     }
 
     func loadWorkspace(
@@ -527,12 +530,68 @@ actor GitRepositoryLoader {
         field.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
+    /// git 의 `%aI`·`%cI` 는 `2026-07-27T11:34:39+09:00` 고정 폭이라 직접 잘라 읽는다.
+    ///
+    /// `ISO8601DateFormatter` 로 같은 일을 하면 열 배 넘게 느리고, 커밋 수만큼 반복되므로
+    /// 워크스페이스 로딩 시간의 대부분을 차지한다. 형식이 어긋나면 포매터에 맡긴다.
     private func parseISODate(_ value: String) -> Date {
-        if let date = isoFormatter.date(from: value) {
+        if let date = fixedWidthISODate(value) {
             return date
         }
-        let fallback = ISO8601DateFormatter()
-        return fallback.date(from: value) ?? .distantPast
+        return isoFormatter.date(from: value) ?? .distantPast
+    }
+
+    private func fixedWidthISODate(_ value: String) -> Date? {
+        let bytes = Array(value.utf8)
+        guard bytes.count == 25,
+              bytes[4] == UInt8(ascii: "-"),
+              bytes[7] == UInt8(ascii: "-"),
+              bytes[10] == UInt8(ascii: "T"),
+              bytes[13] == UInt8(ascii: ":"),
+              bytes[16] == UInt8(ascii: ":"),
+              bytes[22] == UInt8(ascii: ":") else {
+            return nil
+        }
+
+        let sign: Int
+        switch bytes[19] {
+        case UInt8(ascii: "+"): sign = 1
+        case UInt8(ascii: "-"): sign = -1
+        default: return nil
+        }
+
+        func number(_ range: Range<Int>) -> Int? {
+            var result = 0
+            for index in range {
+                let digit = bytes[index]
+                guard digit >= UInt8(ascii: "0"), digit <= UInt8(ascii: "9") else { return nil }
+                result = result * 10 + Int(digit - UInt8(ascii: "0"))
+            }
+            return result
+        }
+
+        guard let year = number(0..<4),
+              let month = number(5..<7),
+              let day = number(8..<10),
+              let hour = number(11..<13),
+              let minute = number(14..<16),
+              let second = number(17..<19),
+              let offsetHour = number(20..<22),
+              let offsetMinute = number(23..<25) else {
+            return nil
+        }
+
+        var components = DateComponents()
+        components.year = year
+        components.month = month
+        components.day = day
+        components.hour = hour
+        components.minute = minute
+        components.second = second
+        components.timeZone = TimeZone(
+            secondsFromGMT: sign * (offsetHour * 3_600 + offsetMinute * 60)
+        )
+        return gregorianCalendar.date(from: components)
     }
 
     private func referenceKind(_ fullName: String) -> GitReference.Kind? {
