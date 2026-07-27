@@ -272,11 +272,7 @@ final class AppModel: ObservableObject {
 
     func refresh() {
         guard !workspaceURLs.isEmpty else { return }
-        loadWorkspaces(
-            workspaceURLs,
-            pathFilter: normalizedPathFilter,
-            preserveRepositoryVisibility: true
-        )
+        loadWorkspaces(workspaceURLs, pathFilter: normalizedPathFilter)
     }
 
     func fetchAll() {
@@ -362,7 +358,6 @@ final class AppModel: ObservableObject {
         loadWorkspaces(
             workspaceURLs,
             pathFilter: normalizedPathFilter,
-            preserveRepositoryVisibility: true,
             isQuiet: true
         )
     }
@@ -518,13 +513,31 @@ final class AppModel: ObservableObject {
             visibleRepositoryIDs.insert(repository.id)
         }
         repositoryScope = nil
+        persistRepositoryVisibility()
         rebuildRows()
     }
 
     func showAllRepositories() {
         visibleRepositoryIDs = Set(repositories.map(\.id))
         repositoryScope = nil
+        persistRepositoryVisibility()
         rebuildRows()
+    }
+
+    /// 현재 탭에 숨긴 저장소를 기록해 다음 실행과 탭 전환에서도 필터가 남게 한다.
+    private func persistRepositoryVisibility() {
+        guard let activeWorkspaceTabID,
+              let index = workspaceTabs.firstIndex(where: { $0.id == activeWorkspaceTabID }) else {
+            return
+        }
+        let hiddenPaths = repositories
+            .map(\.id)
+            .filter { !visibleRepositoryIDs.contains($0) }
+            .map(\.rawValue)
+            .sorted()
+        guard workspaceTabs[index].hiddenRepositoryPaths != hiddenPaths else { return }
+        workspaceTabs[index].hiddenRepositoryPaths = hiddenPaths
+        persistWorkspaceTabs()
     }
 
     func selectCommit(_ commit: GitCommit) {
@@ -679,15 +692,11 @@ final class AppModel: ObservableObject {
     private func loadWorkspaces(
         _ urls: [URL],
         pathFilter: String? = nil,
-        preserveRepositoryVisibility: Bool = false,
         isQuiet: Bool = false
     ) {
         guard remoteOperation == nil else { return }
         let uniqueURLs = uniqueWorkspaceURLs(urls)
         guard !uniqueURLs.isEmpty else { return }
-        let previousRepositoryIDs = Set(repositories.map(\.id))
-        let previouslyHiddenRepositoryIDs = previousRepositoryIDs
-            .subtracting(visibleRepositoryIDs)
         let preservedSelection: QuietSelection? = isQuiet
             ? QuietSelection(
                 commitID: selectedCommit?.id,
@@ -720,10 +729,12 @@ final class AppModel: ObservableObject {
                 workspaceURLs = uniqueURLs
                 repositories = snapshot.repositories
                 referencesByRepository = snapshot.referencesByRepository
-                let loadedRepositoryIDs = Set(snapshot.repositories.map(\.id))
-                visibleRepositoryIDs = preserveRepositoryVisibility
-                    ? loadedRepositoryIDs.subtracting(previouslyHiddenRepositoryIDs)
-                    : loadedRepositoryIDs
+                let hiddenPaths = Set(activeWorkspaceTab?.hiddenRepositoryPaths ?? [])
+                visibleRepositoryIDs = Set(
+                    snapshot.repositories
+                        .map(\.id)
+                        .filter { !hiddenPaths.contains($0.rawValue) }
+                )
                 allCommits = snapshot.commits
                 repositoryScope = nil
                 selectedReference = nil
@@ -867,7 +878,11 @@ final class AppModel: ObservableObject {
     private func validTabs(_ tabs: [WorkspaceTab]) -> [WorkspaceTab] {
         tabs.compactMap { tab in
             let paths = validPaths(tab.paths)
-            return paths.isEmpty ? nil : WorkspaceTab(id: tab.id, paths: paths)
+            return paths.isEmpty ? nil : WorkspaceTab(
+                id: tab.id,
+                paths: paths,
+                hiddenRepositoryPaths: tab.hiddenRepositoryPaths
+            )
         }
     }
 

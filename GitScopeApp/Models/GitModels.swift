@@ -4,10 +4,27 @@ import SwiftUI
 struct WorkspaceTab: Identifiable, Codable, Equatable, Sendable {
     let id: UUID
     let paths: [String]
+    /// 사용자가 저장소 필터에서 숨긴 저장소의 경로.
+    ///
+    /// 보이는 쪽이 아니라 숨긴 쪽을 기억한다. 그래야 워크스페이스에 저장소가 새로 생겼을 때
+    /// 기본으로 보인다.
+    var hiddenRepositoryPaths: [String]
 
-    init(id: UUID = UUID(), paths: [String]) {
+    init(id: UUID = UUID(), paths: [String], hiddenRepositoryPaths: [String] = []) {
         self.id = id
         self.paths = paths
+        self.hiddenRepositoryPaths = hiddenRepositoryPaths
+    }
+
+    /// 이 필드가 없던 시절에 저장된 탭도 그대로 읽어야 하므로 직접 디코딩한다.
+    init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(UUID.self, forKey: .id)
+        paths = try container.decode([String].self, forKey: .paths)
+        hiddenRepositoryPaths = try container.decodeIfPresent(
+            [String].self,
+            forKey: .hiddenRepositoryPaths
+        ) ?? []
     }
 
     var title: String {
