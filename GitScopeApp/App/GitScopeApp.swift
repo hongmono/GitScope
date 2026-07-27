@@ -34,6 +34,12 @@ struct CheckForUpdatesView: View {
 enum AppSettings {
     static let authorAvatarLookupEnabledKey = "settings.authorAvatarLookupEnabled.v1"
     static let githubActionsEnabledKey = "settings.githubActionsEnabled.v1"
+    static let autoFetchEnabledKey = "settings.autoFetchEnabled.v1"
+    static let autoFetchIntervalMinutesKey = "settings.autoFetchIntervalMinutes.v1"
+
+    /// 설정 창에서 고를 수 있는 자동 fetch 주기(분).
+    static let autoFetchIntervalOptions = [1, 5, 15, 30]
+    static let defaultAutoFetchIntervalMinutes = 5
 
     /// 커밋 작성자 아바타를 원격에서 조회할지 여부.
     static var isAuthorAvatarLookupEnabled: Bool {
@@ -43,6 +49,20 @@ enum AppSettings {
     /// GitHub Actions 상태를 조회할지 여부.
     static var isGitHubActionsEnabled: Bool {
         isEnabled(forKey: githubActionsEnabledKey)
+    }
+
+    /// 원격 저장소를 주기적으로 가져올지 여부.
+    static var isAutoFetchEnabled: Bool {
+        isEnabled(forKey: autoFetchEnabledKey)
+    }
+
+    /// 자동 fetch 주기(분). 저장된 값이 없거나 고를 수 없는 값이면 기본값을 쓴다.
+    static var autoFetchIntervalMinutes: Int {
+        guard let stored = UserDefaults.standard.object(forKey: autoFetchIntervalMinutesKey) as? Int,
+              autoFetchIntervalOptions.contains(stored) else {
+            return defaultAutoFetchIntervalMinutes
+        }
+        return stored
     }
 
     private static func isEnabled(forKey key: String) -> Bool {
@@ -55,9 +75,29 @@ struct SettingsView: View {
     private var isAuthorAvatarLookupEnabled = true
     @AppStorage(AppSettings.githubActionsEnabledKey)
     private var isGitHubActionsEnabled = true
+    @AppStorage(AppSettings.autoFetchEnabledKey)
+    private var isAutoFetchEnabled = true
+    @AppStorage(AppSettings.autoFetchIntervalMinutesKey)
+    private var autoFetchIntervalMinutes = AppSettings.defaultAutoFetchIntervalMinutes
 
     var body: some View {
         Form {
+            Section {
+                Toggle("원격 저장소 자동으로 가져오기", isOn: $isAutoFetchEnabled)
+                Picker("가져오기 주기", selection: $autoFetchIntervalMinutes) {
+                    ForEach(AppSettings.autoFetchIntervalOptions, id: \.self) { minutes in
+                        Text("\(minutes)분").tag(minutes)
+                    }
+                }
+                .disabled(!isAutoFetchEnabled)
+            } header: {
+                Text("자동 가져오기")
+            } footer: {
+                Text("설정한 주기마다, 그리고 다른 앱에서 GitScope로 돌아올 때 모든 원격 저장소를 가져옵니다. 원격에 변화가 있을 때만 목록을 갱신하고, 실패하면 알리지 않고 다음 차례에 다시 시도합니다.")
+                    .font(AppFont.metadataValue)
+                    .foregroundStyle(.secondary)
+            }
+
             Section {
                 Toggle("커밋 작성자 아바타 불러오기", isOn: $isAuthorAvatarLookupEnabled)
             } header: {

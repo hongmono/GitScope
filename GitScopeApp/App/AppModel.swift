@@ -84,10 +84,29 @@ final class AppModel: ObservableObject {
     private var githubActionsFastPollUntil: Date?
     private var selectedGitHubChecksCommitID: CommitID?
     private var hasRestoredWorkspace = false
+    private var isAutoFetching = false
+    private var appliedAutoFetchIntervalMinutes: Int?
+    private var settingsObserver: (any NSObjectProtocol)?
+    private lazy var autoFetchScheduler = AutoFetchScheduler { [weak self] in
+        await self?.performAutoFetch()
+    }
     private static let workspaceTabsDefaultsKey = "workspaceTabs.v1"
     private static let activeWorkspaceTabDefaultsKey = "activeWorkspaceTabID.v1"
     private static let branchSidebarVisibleDefaultsKey = "branchSidebarVisible.v1"
     private static let commitDetailsVisibleDefaultsKey = "commitDetailsVisible.v1"
+
+    init() {
+        // 설정 창에서 자동 fetch 를 켜거나 주기를 바꾸면 곧바로 반영한다.
+        settingsObserver = NotificationCenter.default.addObserver(
+            forName: UserDefaults.didChangeNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in
+                self?.syncAutoFetchScheduler()
+            }
+        }
+    }
 
     var availableAuthors: [String] {
         Array(Set(allCommits.filter { !$0.isWorkingTree }.map(\.authorName))).sorted()
@@ -287,6 +306,65 @@ final class AppModel: ObservableObject {
                 errorMessage = failures.joined(separator: "\n\n")
             }
         }
+    }
+
+    /// 설정과 워크스페이스 상태에 맞춰 자동 fetch 스케줄러를 켜고 끈다.
+    private func syncAutoFetchScheduler() {
+        guard AppSettings.isAutoFetchEnabled, !workspaceURLs.isEmpty else {
+            appliedAutoFetchIntervalMinutes = nil
+            autoFetchScheduler.stop()
+            return
+        }
+
+        let intervalMinutes = AppSettings.autoFetchIntervalMinutes
+        guard appliedAutoFetchIntervalMinutes != intervalMinutes
+                || !autoFetchScheduler.isRunning else {
+            return
+        }
+        appliedAutoFetchIntervalMinutes = intervalMinutes
+        autoFetchScheduler.start(intervalMinutes: intervalMinutes)
+    }
+
+    /// 자동 fetch 한 차례.
+    ///
+    /// 수동 원격 작업과 달리 `remoteOperation` 을 세우지 않아 툴바·탭 전환을 막지 않는다.
+    /// git 잠금 충돌은 `GitCommandRunner` 가 actor 라 수동 작업이 뒤이어 실행되는 것으로
+    /// 자연히 피한다. 실패는 알리지 않고 다음 차례에 다시 시도한다.
+    private func performAutoFetch() async {
+        guard AppSettings.isAutoFetchEnabled,
+              !isAutoFetching,
+              remoteOperation == nil,
+              !isLoadingWorkspace,
+              !repositories.isEmpty else {
+            return
+        }
+
+        isAutoFetching = true
+        let targetRepositories = repositories
+        var hasRemoteChanges = false
+        for repository in targetRepositories {
+            guard let hasChanges = try? await remoteService.fetchAllDetectingChanges(
+                repository: repository
+            ) else {
+                continue
+            }
+            hasRemoteChanges = hasRemoteChanges || hasChanges
+        }
+        isAutoFetching = false
+
+        // fetch 도중 탭이 바뀌었으면 지금 화면과 무관한 결과이므로 갱신하지 않는다.
+        guard hasRemoteChanges,
+              remoteOperation == nil,
+              !isLoadingWorkspace,
+              repositories.map(\.id) == targetRepositories.map(\.id) else {
+            return
+        }
+        loadWorkspaces(
+            workspaceURLs,
+            pathFilter: normalizedPathFilter,
+            preserveRepositoryVisibility: true,
+            isQuiet: true
+        )
     }
 
     func refreshGitHubActions() {
@@ -596,10 +674,13 @@ final class AppModel: ObservableObject {
         }
     }
 
+    /// - Parameter isQuiet: 자동 fetch 가 부르는 갱신 경로. 로딩 화면을 띄우지 않고,
+    ///   사용자가 보고 있던 선택 커밋과 브랜치 필터를 로드 후 되살린다.
     private func loadWorkspaces(
         _ urls: [URL],
         pathFilter: String? = nil,
-        preserveRepositoryVisibility: Bool = false
+        preserveRepositoryVisibility: Bool = false,
+        isQuiet: Bool = false
     ) {
         guard remoteOperation == nil else { return }
         let uniqueURLs = uniqueWorkspaceURLs(urls)
@@ -607,12 +688,22 @@ final class AppModel: ObservableObject {
         let previousRepositoryIDs = Set(repositories.map(\.id))
         let previouslyHiddenRepositoryIDs = previousRepositoryIDs
             .subtracting(visibleRepositoryIDs)
+        let preservedSelection: QuietSelection? = isQuiet
+            ? QuietSelection(
+                commitID: selectedCommit?.id,
+                referenceGroupID: selectedReferenceGroupID,
+                repositoryScope: repositoryScope,
+                isCurrentBranchesSelected: isCurrentBranchesSelected
+            )
+            : nil
 
-        isLoadingWorkspace = true
-        errorMessage = nil
+        if !isQuiet {
+            isLoadingWorkspace = true
+            errorMessage = nil
+            clearSelection()
+        }
         githubActionsMonitorTask?.cancel()
         githubActionsMonitorTask = nil
-        clearSelection()
         workspaceTask?.cancel()
         referenceTask?.cancel()
         isLoadingReference = false
@@ -623,7 +714,9 @@ final class AppModel: ObservableObject {
                 guard !Task.isCancelled else { return }
                 referenceTask?.cancel()
                 isLoadingReference = false
-                clearSelection()
+                if !isQuiet {
+                    clearSelection()
+                }
                 workspaceURLs = uniqueURLs
                 repositories = snapshot.repositories
                 referencesByRepository = snapshot.referencesByRepository
@@ -638,14 +731,50 @@ final class AppModel: ObservableObject {
                 isCurrentBranchesSelected = false
                 branchMembership = nil
                 rebuildRows()
+                if let preservedSelection {
+                    restoreQuietSelection(preservedSelection)
+                }
                 startGitHubActionsMonitoring()
+                syncAutoFetchScheduler()
             } catch {
                 guard !Task.isCancelled else { return }
-                errorMessage = error.localizedDescription
+                if !isQuiet {
+                    errorMessage = error.localizedDescription
+                }
             }
             if !Task.isCancelled {
                 isLoadingWorkspace = false
             }
+        }
+    }
+
+    /// 조용한 갱신 전에 붙잡아 두는, 사용자가 보고 있던 선택 상태.
+    private struct QuietSelection {
+        let commitID: CommitID?
+        let referenceGroupID: String?
+        let repositoryScope: RepositoryID?
+        let isCurrentBranchesSelected: Bool
+    }
+
+    /// 조용한 갱신 뒤 선택 상태를 되살린다.
+    ///
+    /// 선택 커밋이 새 목록에 남아 있는지는 `rebuildRows()` 가 이미 판단했으므로 그 결과를
+    /// 존중하고, 커밋 인스턴스만 새로 읽은 것으로 바꿔 브랜치·태그 배지를 최신화한다.
+    private func restoreQuietSelection(_ selection: QuietSelection) {
+        if let commitID = selection.commitID,
+           selectedCommit?.id == commitID,
+           let refreshedCommit = allCommits.first(where: { $0.id == commitID }) {
+            selectedCommit = refreshedCommit
+        }
+
+        if selection.isCurrentBranchesSelected {
+            selectCurrentBranches()
+        } else if let referenceGroupID = selection.referenceGroupID,
+                  let group = mergedReferenceGroups.first(where: { $0.id == referenceGroupID }) {
+            selectReferenceGroup(group)
+        } else if let scope = selection.repositoryScope,
+                  repositories.contains(where: { $0.id == scope }) {
+            repositoryScope = scope
         }
     }
 
@@ -680,6 +809,9 @@ final class AppModel: ObservableObject {
     }
 
     private func unloadCurrentWorkspace() {
+        autoFetchScheduler.stop()
+        appliedAutoFetchIntervalMinutes = nil
+        isAutoFetching = false
         workspaceTask?.cancel()
         referenceTask?.cancel()
         detailsTask?.cancel()

@@ -42,6 +42,32 @@ actor GitRemoteService {
         )
     }
 
+    /// `fetch --all` 을 실행하고 원격 ref 가 실제로 바뀌었는지 알려준다.
+    ///
+    /// 자동 fetch 는 변화가 있을 때만 화면을 다시 그리기 위해 이 값을 쓴다. 스냅샷을
+    /// 읽지 못하면 변화가 있다고 보고 갱신에 맡긴다.
+    func fetchAllDetectingChanges(repository: GitRepository) async throws -> Bool {
+        let before = try? await remoteReferenceSnapshot(repository: repository)
+        try await fetchAll(repository: repository)
+        guard let before,
+              let after = try? await remoteReferenceSnapshot(repository: repository) else {
+            return true
+        }
+        return before != after
+    }
+
+    private func remoteReferenceSnapshot(repository: GitRepository) async throws -> String {
+        try await runner.runText(
+            repositoryURL: repository.rootURL,
+            arguments: [
+                "for-each-ref",
+                "--format=%(objectname) %(refname)",
+                "refs/remotes",
+                "refs/tags"
+            ]
+        )
+    }
+
     func pullRebase(repository: GitRepository, reference: GitReference) async throws {
         guard reference.kind == .local else {
             throw GitRemoteServiceError.localBranchRequired
