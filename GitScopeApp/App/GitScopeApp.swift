@@ -126,7 +126,7 @@ struct SettingsView: View {
 
 @main
 struct GitScopeApp: App {
-    @StateObject private var model = AppModel()
+    @State private var model = AppModel()
     private let updaterController = SPUStandardUpdaterController(
         startingUpdater: shouldStartSparkleUpdater,
         updaterDelegate: nil,

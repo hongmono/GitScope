@@ -1,8 +1,9 @@
 import SwiftUI
 
 struct HistoryView: View {
-    @ObservedObject var model: AppModel
+    var model: AppModel
     @State private var visibleGraphLaneCount = 1
+    @State private var colorIndexCache = RepositoryColorIndexCache()
 
     private var graphLaneCount: Int {
         max(1, visibleGraphLaneCount)
@@ -12,15 +13,22 @@ struct HistoryView: View {
         max(112, 40 + CGFloat(graphLaneCount - 1) * 18)
     }
 
+    /// 저장소 목록이 실제로 바뀔 때만 색 인덱스 표를 다시 만든다. body 평가마다 Dictionary 를
+    /// 새로 만들면 매 갱신이 저장소 수만큼의 할당이 된다. 관찰되지 않는 참조 타입이라 body
+    /// 평가 중에 채워 넣어도 무효화 루프가 생기지 않는다.
     private var repositoryColorIndices: [RepositoryID: Int] {
-        Dictionary(
-            uniqueKeysWithValues: model.repositories.map { repository in
-                (
-                    repository.id,
-                    repository.colorIndex % AppPalette.repositoryBackgrounds.count
-                )
-            }
-        )
+        if colorIndexCache.repositories != model.repositories {
+            colorIndexCache.repositories = model.repositories
+            colorIndexCache.indices = Dictionary(
+                uniqueKeysWithValues: model.repositories.map { repository in
+                    (
+                        repository.id,
+                        repository.colorIndex % AppPalette.repositoryBackgrounds.count
+                    )
+                }
+            )
+        }
+        return colorIndexCache.indices
     }
 
     var body: some View {
@@ -51,13 +59,49 @@ struct HistoryView: View {
                     visibleGraphLaneCount = laneCount
                 }
             }
+
+            // 상한을 채운 저장소가 있으면 이력이 잘렸음을 알린다. 가상화 리스트(NSCollectionView)
+            // 내부 footer 로 넣으면 레이아웃 구조를 건드리게 되므로 리스트 바깥 하단에 둔다.
+            if model.isCommitHistoryTruncated {
+                Divider()
+                Text(
+                    model.repositories.count > 1
+                        ? "일부 저장소는 최근 \(AppModel.commitLoadLimit.formatted())개 커밋만 표시됩니다"
+                        : "최근 \(AppModel.commitLoadLimit.formatted())개 커밋만 표시됩니다"
+                )
+                .font(AppFont.rowLabel)
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 4)
+            }
         }
         .background(.clear)
     }
 }
 
+/// `HistoryView.repositoryColorIndices` 의 메모 저장소. `@State` 로 붙들어 뷰 정체성이
+/// 유지되는 동안 재사용된다.
+@MainActor
+private final class RepositoryColorIndexCache {
+    var repositories: [GitRepository] = []
+    var indices: [RepositoryID: Int] = [:]
+}
+
 private struct HistoryFilterBar: View {
-    @ObservedObject var model: AppModel
+    // 검색 필드에 `$model.query` 바인딩을 넘겨야 해서 `@Bindable` 로 받는다.
+    @Bindable var model: AppModel
+
+    /// 브랜치 축은 두 층이라 제목도 이긴 쪽을 따른다.
+    ///
+    /// 사이드바 선택이 있으면 그 이름(HEAD 선택은 이름이 없어 기본 제목), 선택이 없을 때만
+    /// 저장해 둔 범위의 항목 수를 보여준다.
+    private var branchFilterTitle: String {
+        if let reference = model.selectedReference { return reference.shortName }
+        if model.isCurrentBranchesSelected { return "브랜치" }
+        return model.branchScope.isActive
+            ? "브랜치 \(model.branchScope.memberCount)개"
+            : "브랜치"
+    }
 
     var body: some View {
         HStack(spacing: 8) {
@@ -69,23 +113,10 @@ private struct HistoryFilterBar: View {
             .frame(height: 28)
 
             FilterMenu(
-                title: model.selectedReference?.shortName ?? "브랜치",
-                isActive: model.selectedReference != nil
+                title: branchFilterTitle,
+                isActive: model.selectedReference != nil || model.branchScope.isActive
             ) {
-                Button("모든 브랜치") { model.selectRepository(nil) }
-                Divider()
-                ForEach(GitReference.Kind.allCases, id: \.self) { kind in
-                    let groups = model.referenceGroupsByKind[kind] ?? []
-                    if !groups.isEmpty {
-                        Menu(referenceKindTitle(kind)) {
-                            ForEach(groups) { group in
-                                Button(group.shortName) {
-                                    model.selectReferenceGroup(group)
-                                }
-                            }
-                        }
-                    }
-                }
+                BranchScopeMenuContent(model: model)
             }
 
             FilterMenu(
@@ -147,13 +178,6 @@ private struct HistoryFilterBar: View {
         // 표와의 구분은 아래 `Divider()` 헤어라인 한 줄이 담당한다.
     }
 
-    private func referenceKindTitle(_ kind: GitReference.Kind) -> String {
-        switch kind {
-        case .local: return "로컬"
-        case .remote: return "원격"
-        case .tag: return "태그"
-        }
-    }
 }
 
 /// 히스토리 검색 필드.

@@ -93,6 +93,27 @@ private func appearanceColor(light: NSColor, dark: NSColor) -> Color {
     )
 }
 
+/// 참조(브랜치·태그) 종류를 나타내는 기호·색 매핑.
+///
+/// 히스토리 행 배지·참조 팝오버·브랜치 사이드바가 같은 종류를 같은 기호로 그리도록 한곳에
+/// 모은다. 사이드바는 원격을 네트워크 기호로, 현재 체크아웃된 로컬 브랜치를 채워진 기호로
+/// 구분하고 색도 자체 체계(현재 pink / 그 외 blue)를 쓰므로 겹치는 부분만 공유한다.
+enum ReferenceKindStyle {
+    static func systemImage(for kind: GitReference.Kind) -> String {
+        switch kind {
+        case .local, .remote: return "point.3.connected.trianglepath.dotted"
+        case .tag: return "tag"
+        }
+    }
+
+    static func color(for kind: GitReference.Kind) -> Color {
+        switch kind {
+        case .remote: return AppStatusColor.remote
+        case .local, .tag: return AppStatusColor.success
+        }
+    }
+}
+
 /// 앱 전역 타이포그래피 스케일.
 ///
 /// 사용자가 읽어야 하는 텍스트는 11pt 이상만 사용한다. 그 미만은 `.secondary` 로 그렸을 때

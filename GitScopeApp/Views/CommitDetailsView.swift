@@ -2,7 +2,7 @@ import AppKit
 import SwiftUI
 
 struct CommitDetailsView: View {
-    @ObservedObject var model: AppModel
+    var model: AppModel
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
@@ -154,7 +154,7 @@ private struct CommitInformationView: View {
                 .filter { $0.kind == kind }
                 .map(\.shortName)
             guard !names.isEmpty else { return nil }
-            return "\(referenceKindTitle(kind)): \(names.joined(separator: ", "))"
+            return "\(kind.displayName): \(names.joined(separator: ", "))"
         }
         .joined(separator: "\n")
     }
@@ -245,13 +245,6 @@ private struct CommitInformationView: View {
         }
     }
 
-    private func referenceKindTitle(_ kind: GitReference.Kind) -> String {
-        switch kind {
-        case .local: return "로컬"
-        case .remote: return "원격"
-        case .tag: return "태그"
-        }
-    }
 }
 
 private struct GitHubActionsDetailsSection: View {
@@ -289,11 +282,12 @@ private struct GitHubActionsDetailsSection: View {
 
             VStack(alignment: .leading, spacing: 6) {
                 ForEach(summary.runs) { run in
-                    GitHubActionsResultRow(
+                    GitHubActionsStatusRow(
                         title: run.name,
-                        detail: workflowDetail(run),
+                        detail: run.detailSummary,
                         state: run.state,
-                        webURL: run.webURL
+                        webURL: run.webURL,
+                        style: .inspector
                     )
                 }
             }
@@ -314,11 +308,12 @@ private struct GitHubActionsDetailsSection: View {
 
                 VStack(alignment: .leading, spacing: 6) {
                     ForEach(checks) { check in
-                        GitHubActionsResultRow(
+                        GitHubActionsStatusRow(
                             title: check.name,
                             detail: check.appName,
                             state: check.state,
-                            webURL: check.webURL
+                            webURL: check.webURL,
+                            style: .inspector
                         )
                     }
                 }
@@ -333,60 +328,6 @@ private struct GitHubActionsDetailsSection: View {
             RoundedRectangle(cornerRadius: 7)
                 .stroke(AppColor.separator.opacity(0.55), lineWidth: 0.5)
         )
-    }
-
-    private func workflowDetail(_ run: GitHubWorkflowRun) -> String {
-        var parts = ["#\(run.runNumber)"]
-        if let branch = run.headBranch, !branch.isEmpty {
-            parts.append(branch)
-        }
-        parts.append(run.event)
-        return parts.joined(separator: " · ")
-    }
-}
-
-private struct GitHubActionsResultRow: View {
-    let title: String
-    let detail: String?
-    let state: GitHubActionsState
-    let webURL: URL?
-
-    var body: some View {
-        Button {
-            if let webURL {
-                NSWorkspace.shared.open(webURL)
-            }
-        } label: {
-            HStack(spacing: 7) {
-                Image(systemName: GitHubActionsLabels.systemImage(for: state))
-                    .foregroundStyle(GitHubActionsLabels.color(for: state))
-                    .frame(width: 13)
-                Text(title)
-                    .font(AppFont.rowLabelEmphasized)
-                    .lineLimit(1)
-                if let detail, !detail.isEmpty {
-                    Text(detail)
-                        .font(AppFont.rowLabel)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                }
-                Spacer(minLength: 4)
-                Text(GitHubActionsLabels.title(for: state))
-                    .font(AppFont.rowLabel)
-                    .foregroundStyle(GitHubActionsLabels.color(for: state))
-            }
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .disabled(webURL == nil)
-        .onContinuousHover { phase in
-            switch phase {
-            case .active where webURL != nil:
-                NSCursor.pointingHand.set()
-            case .active, .ended:
-                NSCursor.arrow.set()
-            }
-        }
     }
 }
 
@@ -510,20 +451,14 @@ private struct InspectorUnavailableView: View {
 }
 
 private struct DiffView: View {
-    private struct DiffLine: Identifiable {
-        let id: Int
-        let text: String
-    }
+    let patch: String
 
     @Environment(\.colorScheme) private var colorScheme
 
-    private let lines: [DiffLine]
-
-    init(patch: String) {
-        lines = patch.components(separatedBy: .newlines)
-            .enumerated()
-            .map { DiffLine(id: $0.offset, text: $0.element) }
-    }
+    /// 이 뷰는 부모 body 가 재평가될 때마다 새로 만들어지므로 init 에서 파싱하면 큰 패치는
+    /// 재평가마다 전체 문자열을 다시 분해한다. 파싱 결과를 `@State` 에 두고 패치가 실제로
+    /// 바뀔 때만 갱신한다.
+    @State private var lines: [DiffLine] = []
 
     var body: some View {
         GeometryReader { geometry in
@@ -532,10 +467,10 @@ private struct DiffView: View {
                     ForEach(lines) { line in
                         Text(line.text.isEmpty ? " " : line.text)
                             .font(AppFont.monoSmall)
-                            .foregroundStyle(foreground(for: line.text))
+                            .foregroundStyle(foreground(for: line.kind))
                             .padding(.horizontal, 7)
                             .frame(minWidth: 900, minHeight: 17, alignment: .leading)
-                            .background(background(for: line.text))
+                            .background(background(for: line.kind))
                             .textSelection(.enabled)
                     }
                 }
@@ -549,26 +484,27 @@ private struct DiffView: View {
             // 없애고 평평한 텍스트 배경만 남겨 인스펙터 배경과 톤이 겹치지 않게 한다.
             .background(AppColor.contentSurface)
         }
+        .onChange(of: patch, initial: true) { _, patch in
+            lines = DiffLine.parse(patch)
+        }
     }
 
-    private func foreground(for line: String) -> Color {
-        if line.hasPrefix("+++") || line.hasPrefix("---") || line.hasPrefix("@@") {
-            return .secondary
+    private func foreground(for kind: DiffLine.Kind) -> Color {
+        switch kind {
+        case .fileHeader, .hunkHeader: return .secondary
+        case .addition: return AppStatusColor.success
+        case .deletion: return AppStatusColor.danger
+        case .context: return .primary
         }
-        if line.hasPrefix("+") { return AppStatusColor.success }
-        if line.hasPrefix("-") { return AppStatusColor.danger }
-        return .primary
     }
 
-    private func background(for line: String) -> Color {
-        if line.hasPrefix("@@") { return AppStatusColor.progressFill.opacity(highlightOpacity) }
-        if line.hasPrefix("+") && !line.hasPrefix("+++") {
-            return AppStatusColor.successFill.opacity(highlightOpacity)
+    private func background(for kind: DiffLine.Kind) -> Color {
+        switch kind {
+        case .hunkHeader: return AppStatusColor.progressFill.opacity(highlightOpacity)
+        case .addition: return AppStatusColor.successFill.opacity(highlightOpacity)
+        case .deletion: return AppStatusColor.dangerFill.opacity(highlightOpacity)
+        case .fileHeader, .context: return .clear
         }
-        if line.hasPrefix("-") && !line.hasPrefix("---") {
-            return AppStatusColor.dangerFill.opacity(highlightOpacity)
-        }
-        return .clear
     }
 
     /// 다크에서는 바탕이 거의 검정이어서 라이트와 같은 불투명도로는 하이라이트가 보이지 않는다.

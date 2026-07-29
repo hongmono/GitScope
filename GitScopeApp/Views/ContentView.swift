@@ -133,7 +133,8 @@ extension View {
 }
 
 struct ContentView: View {
-    @ObservedObject var model: AppModel
+    // 인스펙터 표시 여부에 `$model.isCommitDetailsVisible` 바인딩을 넘겨야 해서 `@Bindable` 이다.
+    @Bindable var model: AppModel
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private var stateAnimation: Animation? {
@@ -144,9 +145,14 @@ struct ContentView: View {
 
     /// 사이드바 표시 여부의 단일 원본은 모델의 Bool 이다. 네이티브 분할선으로 사이드바를
     /// 접었을 때도 `⌘B` 메뉴 문구가 어긋나지 않도록 별도 `@State` 없이 양방향으로 변환한다.
+    ///
+    /// 현재 값은 `get` 클로저가 아니라 여기서 미리 읽는다. 프로퍼티 단위 관찰에서는 `body`
+    /// 평가 중에 읽은 것만 추적되므로, 나중에 불리는 클로저 안에서만 읽으면 값이 바뀌어도
+    /// 화면이 다시 그려지지 않는다.
     private var branchColumnVisibility: Binding<NavigationSplitViewVisibility> {
-        Binding(
-            get: { model.isBranchSidebarVisible ? .doubleColumn : .detailOnly },
+        let isVisible = model.isBranchSidebarVisible
+        return Binding(
+            get: { isVisible ? .doubleColumn : .detailOnly },
             set: { visibility in
                 let isVisible = visibility != .detailOnly
                 if model.isBranchSidebarVisible != isVisible {
@@ -157,6 +163,10 @@ struct ContentView: View {
     }
 
     var body: some View {
+        // 얼럿의 표시 여부와 문구 모두 이 값 하나에서 나온다. 아래 클로저 안에서만 읽으면
+        // 관찰에 잡히지 않으므로 body 평가 중인 여기서 한 번 읽어 둔다.
+        let errorMessage = model.errorMessage
+
         Group {
             if model.workspaceURLs.isEmpty && model.isLoadingWorkspace {
                 InitialWorkspaceLoadingView()
@@ -192,7 +202,7 @@ struct ContentView: View {
         .alert(
             "GitScope 오류",
             isPresented: Binding(
-                get: { model.errorMessage != nil },
+                get: { errorMessage != nil },
                 set: { if !$0 { model.errorMessage = nil } }
             )
         ) {
@@ -200,7 +210,7 @@ struct ContentView: View {
                 model.errorMessage = nil
             }
         } message: {
-            Text(model.errorMessage ?? "알 수 없는 오류가 발생했습니다.")
+            Text(errorMessage ?? "알 수 없는 오류가 발생했습니다.")
         }
     }
 
@@ -287,7 +297,7 @@ private struct WorkspaceLoadingOverlay: View {
 }
 
 private struct WorkspaceToolbarTabs: View {
-    @ObservedObject var model: AppModel
+    var model: AppModel
     @State private var tabContentWidth: CGFloat = 640
 
     private let maximumTabContentWidth: CGFloat = 560
@@ -356,7 +366,7 @@ private struct WorkspaceToolbarTabs: View {
 }
 
 private struct WorkspaceToolbarActions: View {
-    @ObservedObject var model: AppModel
+    var model: AppModel
 
     var body: some View {
         HStack(spacing: 7) {
@@ -370,6 +380,22 @@ private struct WorkspaceToolbarActions: View {
             if model.isLoading {
                 ProgressView()
                     .controlSize(.small)
+            }
+
+            // 아래 세 안내는 모두 얼럿 없이 아이콘과 툴팁으로만 알린다. 화면을 가리지 않으면서
+            // 정상 상태와는 구별되게 하는 것이 목적이다.
+            if let notice = model.repositoryLoadNotice {
+                Image(systemName: "folder.badge.questionmark")
+                    .foregroundStyle(AppStatusColor.warning)
+                    .help(notice)
+                    .accessibilityLabel("일부 저장소를 불러오지 못함")
+            }
+
+            if let notice = model.autoFetchFailureNotice {
+                Image(systemName: "exclamationmark.arrow.triangle.2.circlepath")
+                    .foregroundStyle(AppStatusColor.warning)
+                    .help(notice)
+                    .accessibilityLabel("자동 가져오기가 계속 실패하는 중")
             }
 
             if let notice = model.githubActionsNotice {
@@ -480,7 +506,7 @@ private struct WorkspaceTabItem: View {
 }
 
 private struct WelcomeView: View {
-    @ObservedObject var model: AppModel
+    var model: AppModel
 
     var body: some View {
         VStack(spacing: 14) {
