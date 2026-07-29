@@ -35,10 +35,17 @@ enum GitRemoteServiceError: LocalizedError {
 actor GitRemoteService {
     private let runner = GitCommandRunner()
 
+    /// 네트워크를 타는 명령이 응답 없는 원격에 매달리지 않도록 두는 상한.
+    private static let networkTimeout: TimeInterval = 120
+    /// 로컬 저장소만 건드리는 복구 명령의 상한.
+    private static let localWriteTimeout: TimeInterval = 60
+
     func fetchAll(repository: GitRepository) async throws {
         _ = try await runner.runText(
             repositoryURL: repository.rootURL,
-            arguments: ["-c", "color.ui=false", "fetch", "--all"]
+            arguments: ["-c", "color.ui=false", "fetch", "--all"],
+            timeout: Self.networkTimeout,
+            exclusive: true
         )
     }
 
@@ -94,7 +101,9 @@ actor GitRemoteService {
         do {
             _ = try await runner.runText(
                 repositoryURL: repository.rootURL,
-                arguments: ["-c", "color.ui=false", "pull", "--rebase"]
+                arguments: ["-c", "color.ui=false", "pull", "--rebase"],
+                timeout: Self.networkTimeout,
+                exclusive: true
             )
         } catch {
             if await isRebaseInProgress(repository: repository) {
@@ -102,7 +111,9 @@ actor GitRemoteService {
                 do {
                     _ = try await runner.runText(
                         repositoryURL: repository.rootURL,
-                        arguments: ["rebase", "--abort"]
+                        arguments: ["rebase", "--abort"],
+                        timeout: Self.localWriteTimeout,
+                        exclusive: true
                     )
                     throw GitRemoteServiceError.rebaseAborted(originalMessage)
                 } catch let serviceError as GitRemoteServiceError {
@@ -136,7 +147,9 @@ actor GitRemoteService {
                 "push", "--porcelain",
                 tracking.remoteName,
                 "\(reference.fullName):\(tracking.remoteRef)"
-            ]
+            ],
+            timeout: Self.networkTimeout,
+            exclusive: true
         )
     }
 
@@ -147,11 +160,31 @@ actor GitRemoteService {
         return tracking
     }
 
+    /// rebase 가 지금 진행 중인지 본다.
+    ///
+    /// `REBASE_HEAD` 는 rebase 가 정상적으로 끝난 뒤에도 남아 있어 판정에 쓸 수 없다.
+    /// 실제로 진행 중일 때만 존재하는 `rebase-merge`·`rebase-apply` 디렉터리로 확인한다.
+    /// 경로는 `--git-path` 로 물어봐 worktree 나 분리된 gitdir 에서도 맞게 나온다.
     private func isRebaseInProgress(repository: GitRepository) async -> Bool {
-        (try? await runner.runText(
-            repositoryURL: repository.rootURL,
-            arguments: ["rev-parse", "--verify", "REBASE_HEAD"],
-            maximumBytes: 1_024
-        )) != nil
+        for stateDirectory in ["rebase-merge", "rebase-apply"] {
+            guard let path = try? await runner.runText(
+                repositoryURL: repository.rootURL,
+                arguments: ["rev-parse", "--git-path", stateDirectory],
+                maximumBytes: 4_096
+            ).trimmingCharacters(in: .whitespacesAndNewlines), !path.isEmpty else {
+                continue
+            }
+
+            // 상대 경로로 나오면 git 을 실행한 저장소 루트 기준이다.
+            let url = path.hasPrefix("/")
+                ? URL(fileURLWithPath: path)
+                : repository.rootURL.appendingPathComponent(path)
+            var isDirectory: ObjCBool = false
+            if FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory),
+               isDirectory.boolValue {
+                return true
+            }
+        }
+        return false
     }
 }

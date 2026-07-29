@@ -1,13 +1,30 @@
 import Foundation
 
+/// GitHub API 레이트리밋 상태. 403/429 응답의 `Retry-After` /
+/// `X-RateLimit-Remaining` / `X-RateLimit-Reset` 헤더로 만들어진다.
+/// 폴링 주기를 조정하려는 쪽은 `retryAt` 이후에 다시 시도하면 된다.
+struct GitHubRateLimitStatus: Equatable, Sendable {
+    /// 남은 허용 요청 수 (`X-RateLimit-Remaining`, 헤더가 없으면 nil).
+    let remainingRequests: Int?
+    /// 이 시각 이후에 다시 시도할 수 있다.
+    let retryAt: Date
+}
+
 enum GitHubActionsServiceError: LocalizedError {
     case invalidResponse
     case requestFailed(status: Int, message: String)
+    case rateLimited(GitHubRateLimitStatus)
 
     var errorDescription: String? {
         switch self {
         case .invalidResponse:
             return "GitHub에서 올바르지 않은 응답을 받았습니다."
+        case let .rateLimited(status):
+            let formatter = DateFormatter()
+            formatter.dateStyle = .none
+            formatter.timeStyle = .short
+            let retryTime = formatter.string(from: status.retryAt)
+            return "GitHub API 호출 한도를 초과했습니다. \(retryTime) 이후 다시 시도해주세요."
         case let .requestFailed(status, message):
             if status == 404 {
                 return "GitHub Actions 정보를 찾지 못했습니다. 비공개 저장소라면 `gh auth login`으로 로그인해주세요."
@@ -118,6 +135,10 @@ actor GitHubActionsService {
         return decoder
     }()
     private var workflowCache: [GitHubRepository: WorkflowCache] = [:]
+
+    /// 마지막 요청에서 관측한 레이트리밋 상태. 레이트리밋이 아닌 응답을
+    /// 받으면 nil 로 돌아간다. 폴링 간격을 조정하려는 소비자가 읽는다.
+    private(set) var lastRateLimitStatus: GitHubRateLimitStatus?
 
     func isAuthenticated() async -> Bool {
         await credentialProvider.token() != nil
@@ -276,10 +297,48 @@ actor GitHubActionsService {
         guard let response = urlResponse as? HTTPURLResponse else {
             throw GitHubActionsServiceError.invalidResponse
         }
+        if let rateLimit = Self.rateLimitStatus(from: response) {
+            lastRateLimitStatus = rateLimit
+            throw GitHubActionsServiceError.rateLimited(rateLimit)
+        }
+        if (200..<300).contains(response.statusCode) || response.statusCode == 304 {
+            lastRateLimitStatus = nil
+        }
         return (
             data,
             response.statusCode,
             response.value(forHTTPHeaderField: "ETag")
+        )
+    }
+
+    /// 403/429 중 실제 레이트리밋 응답만 골라낸다. `Retry-After` 가 있으면
+    /// (2차 한도) 그 값을 쓰고, 아니면 `X-RateLimit-Remaining` 이 0 이하일 때
+    /// `X-RateLimit-Reset`(epoch 초)을 재시도 시각으로 삼는다. 권한 문제로 온
+    /// 403 은 nil 을 돌려줘 기존 requestFailed 경로로 처리되게 한다.
+    private static func rateLimitStatus(
+        from response: HTTPURLResponse
+    ) -> GitHubRateLimitStatus? {
+        guard response.statusCode == 403 || response.statusCode == 429 else {
+            return nil
+        }
+
+        let remaining = response.value(forHTTPHeaderField: "X-RateLimit-Remaining")
+            .flatMap(Int.init)
+        if let retryAfter = response.value(forHTTPHeaderField: "Retry-After")
+            .flatMap(TimeInterval.init) {
+            return GitHubRateLimitStatus(
+                remainingRequests: remaining,
+                retryAt: Date(timeIntervalSinceNow: max(0, retryAfter))
+            )
+        }
+
+        guard let remaining, remaining <= 0 else { return nil }
+        let resetAt = response.value(forHTTPHeaderField: "X-RateLimit-Reset")
+            .flatMap(TimeInterval.init)
+            .map { Date(timeIntervalSince1970: $0) }
+        return GitHubRateLimitStatus(
+            remainingRequests: remaining,
+            retryAt: resetAt ?? Date(timeIntervalSinceNow: 60)
         )
     }
 
@@ -312,62 +371,181 @@ actor GitHubActionsService {
 private actor GitHubCredentialProvider {
     private var hasLoadedToken = false
     private var cachedToken: String?
+    private var loadTask: Task<String?, Never>?
+    private var generation = 0
 
-    func token() -> String? {
+    func token() async -> String? {
         if hasLoadedToken { return cachedToken }
-        hasLoadedToken = true
+        if let loadTask { return await loadTask.value }
 
+        let task = Task { await Self.loadToken() }
+        loadTask = task
+        // 로딩 중 reset() 이 끼어들면 낡은 결과를 캐시하지 않는다.
+        let startedGeneration = generation
+        let token = await task.value
+        if generation == startedGeneration {
+            loadTask = nil
+            hasLoadedToken = true
+            cachedToken = token
+        }
+        return token
+    }
+
+    func reset() {
+        generation += 1
+        loadTask = nil
+        hasLoadedToken = false
+        cachedToken = nil
+    }
+
+    private static func loadToken() async -> String? {
         let environment = ProcessInfo.processInfo.environment
         if let token = environment["GH_TOKEN"] ?? environment["GITHUB_TOKEN"],
            !token.isEmpty {
-            cachedToken = token
             return token
         }
 
         for executableURL in githubCLIExecutableURLs() {
             guard FileManager.default.isExecutableFile(atPath: executableURL.path),
-                  let token = runGitHubCLIToken(executableURL: executableURL),
+                  let token = await runGitHubCLIToken(executableURL: executableURL),
                   !token.isEmpty else {
                 continue
             }
-            cachedToken = token
             return token
         }
         return nil
     }
 
-    func reset() {
-        hasLoadedToken = false
-        cachedToken = nil
-    }
-
-    private func githubCLIExecutableURLs() -> [URL] {
+    private static func githubCLIExecutableURLs() -> [URL] {
         [
             URL(fileURLWithPath: "/opt/homebrew/bin/gh"),
             URL(fileURLWithPath: "/usr/local/bin/gh")
         ]
     }
 
-    private func runGitHubCLIToken(executableURL: URL) -> String? {
+    private static let tokenTimeout: TimeInterval = 10
+
+    private static func runGitHubCLIToken(executableURL: URL) async -> String? {
         let output = Pipe()
-        let errors = Pipe()
         let process = Process()
         process.executableURL = executableURL
         process.arguments = ["auth", "token", "--hostname", "github.com"]
         process.standardOutput = output
-        process.standardError = errors
+        // stderr 를 파이프로 받아 놓고 읽지 않으면 64KB 를 넘는 순간
+        // 자식이 쓰기에서 막혀 영영 종료하지 않는다. 쓰지 않으므로 버린다.
+        process.standardError = FileHandle.nullDevice
+
+        // stdout 도 종료를 기다리기 전에 비동기로 읽는다.
+        let completion = TokenSubprocessCompletion()
+        let outputHandle = output.fileHandleForReading
+        outputHandle.readabilityHandler = { handle in
+            let chunk = handle.availableData
+            if chunk.isEmpty {
+                handle.readabilityHandler = nil
+                completion.finishOutput()
+            } else {
+                completion.appendOutput(chunk)
+            }
+        }
+        process.terminationHandler = {
+            completion.finishProcess(status: $0.terminationStatus)
+        }
 
         do {
             try process.run()
-            process.waitUntilExit()
         } catch {
+            outputHandle.readabilityHandler = nil
             return nil
         }
-        guard process.terminationStatus == 0 else { return nil }
 
-        let data = output.fileHandleForReading.readDataToEndOfFile()
-        let token = String(decoding: data, as: UTF8.self)
+        let result = await withCheckedContinuation { continuation in
+            completion.install(continuation)
+            DispatchQueue.global(qos: .utility).asyncAfter(
+                deadline: .now() + tokenTimeout
+            ) {
+                completion.expire()
+            }
+        }
+
+        guard let result else {
+            outputHandle.readabilityHandler = nil
+            process.terminate()
+            return nil
+        }
+        guard result.status == 0 else { return nil }
+        let token = String(decoding: result.output, as: UTF8.self)
             .trimmingCharacters(in: .whitespacesAndNewlines)
         return token.isEmpty ? nil : token
+    }
+}
+
+/// `gh auth token` 서브프로세스의 종료와 stdout EOF 를 모두 기다렸다가
+/// 정확히 한 번만 continuation 을 재개한다. readabilityHandler /
+/// terminationHandler / 타임아웃이 서로 다른 스레드에서 호출되므로 락으로
+/// 보호한다.
+private final class TokenSubprocessCompletion: @unchecked Sendable {
+    private let lock = NSLock()
+    private var outputData = Data()
+    private var terminationStatus: Int32?
+    private var isOutputComplete = false
+    private var didResume = false
+    private var continuation: CheckedContinuation<(status: Int32, output: Data)?, Never>?
+
+    func appendOutput(_ chunk: Data) {
+        lock.lock()
+        outputData.append(chunk)
+        lock.unlock()
+    }
+
+    func finishOutput() {
+        lock.lock()
+        isOutputComplete = true
+        let resume = resumeActionLocked()
+        lock.unlock()
+        resume?()
+    }
+
+    func finishProcess(status: Int32) {
+        lock.lock()
+        terminationStatus = status
+        let resume = resumeActionLocked()
+        lock.unlock()
+        resume?()
+    }
+
+    func install(
+        _ continuation: CheckedContinuation<(status: Int32, output: Data)?, Never>
+    ) {
+        lock.lock()
+        self.continuation = continuation
+        let resume = resumeActionLocked()
+        lock.unlock()
+        resume?()
+    }
+
+    /// 타임아웃: 아직 재개되지 않았다면 nil 로 재개한다.
+    func expire() {
+        lock.lock()
+        guard !didResume, let continuation else {
+            lock.unlock()
+            return
+        }
+        didResume = true
+        self.continuation = nil
+        lock.unlock()
+        continuation.resume(returning: nil)
+    }
+
+    private func resumeActionLocked() -> (() -> Void)? {
+        guard !didResume,
+              let continuation,
+              let status = terminationStatus,
+              isOutputComplete else {
+            return nil
+        }
+        didResume = true
+        self.continuation = nil
+        let output = outputData
+        return { continuation.resume(returning: (status, output)) }
     }
 }

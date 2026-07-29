@@ -1,6 +1,22 @@
 import AppKit
 import Foundation
 
+/// NotificationCenter 옵저버 토큰의 수명을 참조 수명에 묶는 상자.
+///
+/// 스케줄러가 `stop()` 없이 사라져도 이 상자가 함께 해제되며 옵저버를 걷어낸다.
+/// `@MainActor` 클래스의 deinit 에서 격리된 상태를 건드리지 않기 위한 우회이기도 하다.
+private final class ObserverToken {
+    let token: any NSObjectProtocol
+
+    init(_ token: any NSObjectProtocol) {
+        self.token = token
+    }
+
+    deinit {
+        NotificationCenter.default.removeObserver(token)
+    }
+}
+
 /// 자동 fetch 를 실행할 시점만 판단하는 스케줄러.
 ///
 /// 주기 타이머와 앱 활성화 알림 두 경로로 `onFire` 를 호출한다. 무엇을 가져올지,
@@ -14,7 +30,7 @@ final class AutoFetchScheduler {
 
     private let onFire: () async -> Void
     private var timerTask: Task<Void, Never>?
-    private var activationObserver: (any NSObjectProtocol)?
+    private var activationObserver: ObserverToken?
     private var lastFireDate: Date?
     private var isFiring = false
 
@@ -41,24 +57,24 @@ final class AutoFetchScheduler {
             }
         }
 
-        activationObserver = NotificationCenter.default.addObserver(
-            forName: NSApplication.didBecomeActiveNotification,
-            object: nil,
-            queue: .main
-        ) { [weak self] _ in
-            Task { @MainActor in
-                self?.fireOnActivation()
+        activationObserver = ObserverToken(
+            NotificationCenter.default.addObserver(
+                forName: NSApplication.didBecomeActiveNotification,
+                object: nil,
+                queue: .main
+            ) { [weak self] _ in
+                Task { @MainActor in
+                    self?.fireOnActivation()
+                }
             }
-        }
+        )
     }
 
     func stop() {
         timerTask?.cancel()
         timerTask = nil
-        if let activationObserver {
-            NotificationCenter.default.removeObserver(activationObserver)
-            self.activationObserver = nil
-        }
+        // 토큰을 버리면 상자의 deinit 이 옵저버를 제거한다.
+        activationObserver = nil
     }
 
     private func fireOnActivation() {
