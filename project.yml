@@ -51,3 +51,21 @@ targets:
       - package: Sparkle
     scheme:
       gatherCoverageData: false
+      testTargets:
+        - GitScopeTests
+  GitScopeTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - path: GitScopeTests
+      # 앱을 TEST_HOST 로 띄우지 않는 순수 로직 테스트 번들이라, 검증 대상 소스를
+      # 테스트 모듈에 직접 컴파일한다. (앱 실행 없이 테스트가 돌고, CI 서명도 불필요)
+      - path: GitScopeApp/Models/GitModels.swift
+      - path: GitScopeApp/Services/CommitGraphLayout.swift
+      - path: GitScopeApp/Services/GitRepositoryLoader.swift
+      - path: GitScopeApp/Services/GitCommandRunner.swift
+      - path: GitScopeApp/Services/RepositoryScanner.swift
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        SWIFT_STRICT_CONCURRENCY: complete
