@@ -64,6 +64,8 @@ targets:
       - path: GitScopeApp/Services/CommitGraphLayout.swift
       - path: GitScopeApp/Services/GitRepositoryLoader.swift
       - path: GitScopeApp/Services/GitCommandRunner.swift
+      - path: GitScopeApp/Services/GitRemoteService.swift
+      - path: GitScopeApp/Services/GitBranchService.swift
       - path: GitScopeApp/Services/RepositoryScanner.swift
     settings:
       base:
