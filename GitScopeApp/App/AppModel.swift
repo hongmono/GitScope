@@ -73,6 +73,8 @@ final class AppModel {
     private(set) var isLoadingDetails = false
     private(set) var isLoadingPatch = false
     private(set) var remoteOperation: GitRemoteOperation?
+    /// 확인 다이얼로그를 기다리는 삭제 작업. 비어 있지 않은 동안에는 git 명령이 돌지 않는다.
+    private(set) var pendingBranchAction: PendingBranchAction?
     var errorMessage: String?
 
     var query = "" {
@@ -147,6 +149,7 @@ final class AppModel {
 
     private let loader = GitRepositoryLoader()
     private let remoteService = GitRemoteService()
+    private let branchService = GitBranchService()
     private let githubActionsService = GitHubActionsService.shared
     // 아래는 전부 뷰가 읽지 않는 내부 상태다. 관찰 대상으로 두면 화면과 무관한 쓰기가
     // 추적 등록만 만들어 내므로 `@ObservationIgnored` 로 뺀다. 이 값들이 바뀌어 화면이
@@ -381,6 +384,125 @@ final class AppModel {
 
     func push(_ group: MergedReferenceGroup) {
         runRemoteOperation(.push, references: group.pushTargets)
+    }
+
+    /// 체크아웃되지 않은 브랜치를 원격과 fast-forward 로 맞춘다.
+    func fastForwardPull(_ group: MergedReferenceGroup) {
+        runRemoteOperation(.fastForwardPull, references: group.fastForwardPullTargets)
+    }
+
+    /// upstream 이 없는 브랜치를 원격에 게시한다.
+    func publish(_ group: MergedReferenceGroup) {
+        runRemoteOperation(.publish, references: group.publishTargets)
+    }
+
+    /// 각 저장소의 현재 브랜치를 이 그룹의 브랜치 위로 rebase 한다.
+    func rebaseCurrentBranch(onto group: MergedReferenceGroup) {
+        runRemoteOperation(.rebase, references: group.rebaseOntoTargets)
+    }
+
+    /// rebase 메뉴 레이블에 넣을 "현재 브랜치" 이름.
+    ///
+    /// 대상 저장소마다 체크아웃된 브랜치가 다를 수 있다. 하나로 모이면 그 이름을 그대로
+    /// 쓰고, 갈리면 개수로 뭉뚱그린다. 체크아웃된 브랜치가 하나도 없으면 nil 이다.
+    func currentBranchName(forRebaseOnto group: MergedReferenceGroup) -> String? {
+        var names = Set<String>()
+        for repositoryID in Set(group.rebaseOntoTargets.map(\.repositoryID)) {
+            let current = referencesByRepository[repositoryID]?.first {
+                $0.kind == .local && $0.isCurrent
+            }
+            if let current {
+                names.insert(current.shortName)
+            }
+        }
+        guard let onlyName = names.first else { return nil }
+        return names.count == 1 ? onlyName : "현재 브랜치 \(names.count)개"
+    }
+
+    // MARK: - 삭제 (확인 다이얼로그를 거친 뒤에만 실행된다)
+
+    func requestDeleteLocalBranch(_ group: MergedReferenceGroup) {
+        requestBranchAction(
+            kind: .deleteLocalBranch(force: false),
+            group: group,
+            references: group.deletableLocalReferences
+        )
+    }
+
+    func requestDeleteRemoteBranch(_ group: MergedReferenceGroup) {
+        requestBranchAction(
+            kind: .deleteRemoteBranch,
+            group: group,
+            references: group.deletableRemoteReferences
+        )
+    }
+
+    func requestDeleteLocalTag(_ group: MergedReferenceGroup) {
+        requestBranchAction(
+            kind: .deleteLocalTag,
+            group: group,
+            references: group.deletableTagReferences
+        )
+    }
+
+    func requestDeleteRemoteTag(_ group: MergedReferenceGroup) {
+        requestBranchAction(
+            kind: .deleteRemoteTag,
+            group: group,
+            references: group.deletableTagReferences
+        )
+    }
+
+    /// 확인을 받은 삭제만 실제 git 명령으로 넘긴다.
+    func confirmPendingBranchAction() {
+        guard let action = pendingBranchAction else { return }
+        pendingBranchAction = nil
+
+        switch action.kind {
+        case .deleteLocalBranch(let force):
+            runRemoteOperation(
+                .deleteLocalBranch,
+                references: action.targets,
+                group: action.group,
+                force: force
+            )
+        case .deleteRemoteBranch:
+            runRemoteOperation(.deleteRemoteBranch, references: action.targets)
+        case .deleteLocalTag:
+            runRemoteOperation(.deleteLocalTag, references: action.targets)
+        case .deleteRemoteTag:
+            runRemoteOperation(.deleteRemoteTag, references: action.targets)
+        }
+    }
+
+    func cancelPendingBranchAction() {
+        pendingBranchAction = nil
+    }
+
+    /// 다이얼로그를 세운다. 대상이 없거나 다른 작업이 도는 중이면 아무 일도 하지 않는다.
+    private func requestBranchAction(
+        kind: PendingBranchAction.Kind,
+        group: MergedReferenceGroup,
+        references: [GitReference]
+    ) {
+        guard remoteOperation == nil, pendingBranchAction == nil, !references.isEmpty else {
+            return
+        }
+        pendingBranchAction = PendingBranchAction(
+            kind: kind,
+            group: group,
+            targets: references,
+            repositoryNames: repositoryNames(for: references)
+        )
+    }
+
+    /// 참조가 걸쳐 있는 저장소 이름. 중복은 지우고 참조 순서를 그대로 따른다.
+    private func repositoryNames(for references: [GitReference]) -> [String] {
+        var seenIDs = Set<RepositoryID>()
+        return references.compactMap { reference in
+            guard seenIDs.insert(reference.repositoryID).inserted else { return nil }
+            return repositoryNamesByID[reference.repositoryID]
+        }
     }
 
     func restoreWorkspaceIfNeeded() {
@@ -1057,9 +1179,14 @@ final class AppModel {
         return value.isEmpty ? nil : value
     }
 
+    /// - Parameters:
+    ///   - group: 삭제처럼 실패 뒤 다이얼로그를 다시 세워야 하는 작업이 넘긴다.
+    ///   - force: 로컬 브랜치 삭제에서 `-d` 대신 `-D` 를 쓸지. 재확인을 거친 뒤에만 참이다.
     private func runRemoteOperation(
         _ kind: GitRemoteOperationKind,
-        references: [GitReference]
+        references: [GitReference],
+        group: MergedReferenceGroup? = nil,
+        force: Bool = false
     ) {
         guard remoteOperation == nil else { return }
         let targets = references.compactMap { reference -> (GitRepository, GitReference)? in
@@ -1082,6 +1209,8 @@ final class AppModel {
         remoteTask = Task {
             var failures: [String] = []
             var completedPush = false
+            // `-d` 가 미병합을 이유로 거절한 브랜치. 오류로 알리지 않고 재확인 다이얼로그로 잇는다.
+            var unmergedReferences: [GitReference] = []
             for (repository, reference) in targets {
                 do {
                     switch kind {
@@ -1098,7 +1227,46 @@ final class AppModel {
                             reference: reference
                         )
                         completedPush = true
+                    case .fastForwardPull:
+                        try await remoteService.fastForwardFetch(
+                            repository: repository,
+                            reference: reference
+                        )
+                    case .publish:
+                        try await remoteService.publish(
+                            repository: repository,
+                            reference: reference
+                        )
+                        completedPush = true
+                    case .rebase:
+                        try await branchService.rebase(
+                            repository: repository,
+                            ontoReference: reference
+                        )
+                    case .deleteLocalBranch:
+                        try await branchService.deleteLocalBranch(
+                            repository: repository,
+                            reference: reference,
+                            force: force
+                        )
+                    case .deleteLocalTag:
+                        try await branchService.deleteLocalTag(
+                            repository: repository,
+                            reference: reference
+                        )
+                    case .deleteRemoteBranch:
+                        try await remoteService.deleteRemoteBranch(
+                            repository: repository,
+                            reference: reference
+                        )
+                    case .deleteRemoteTag:
+                        try await remoteService.deleteRemoteTag(
+                            repository: repository,
+                            tagName: reference.shortName
+                        )
                     }
+                } catch GitBranchServiceError.branchNotMerged {
+                    unmergedReferences.append(reference)
                 } catch {
                     failures.append(
                         "\(repository.name) · \(reference.shortName): \(error.localizedDescription)"
@@ -1114,6 +1282,16 @@ final class AppModel {
             refresh()
             if !failures.isEmpty {
                 errorMessage = failures.joined(separator: "\n\n")
+            }
+            // 미병합 브랜치는 `-D` 로만 지울 수 있다. `-d` 로 이미 지워진 저장소를 다시
+            // 겨냥하지 않도록, 미병합으로 거절당한 참조만 모아 한 번 더 확인을 받는다.
+            if !unmergedReferences.isEmpty, let group {
+                pendingBranchAction = PendingBranchAction(
+                    kind: .deleteLocalBranch(force: true),
+                    group: group,
+                    targets: unmergedReferences,
+                    repositoryNames: repositoryNames(for: unmergedReferences)
+                )
             }
         }
     }

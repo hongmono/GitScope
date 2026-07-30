@@ -149,6 +149,93 @@ enum GitRemoteOperationKind: String, Sendable {
     case fetch
     case pull
     case push
+    /// 현재 브랜치를 다른 브랜치 위로 rebase. 로컬 작업이지만 진행 중 중복 실행 차단과
+    /// 메뉴 비활성화는 원격 작업과 같은 상태로 관리한다.
+    case rebase
+    case fastForwardPull
+    case publish
+    case deleteLocalBranch
+    case deleteRemoteBranch
+    case deleteLocalTag
+    case deleteRemoteTag
+
+    /// 진행 중 메뉴에 띄우는 문구. 없으면 원래 항목 이름을 그대로 쓴다.
+    var progressTitle: String {
+        switch self {
+        case .fetch: return "가져오는 중…"
+        case .pull, .fastForwardPull: return "Pull 중…"
+        case .push, .publish: return "Push 중…"
+        case .rebase: return "Rebase 중…"
+        case .deleteLocalBranch, .deleteRemoteBranch, .deleteLocalTag, .deleteRemoteTag:
+            return "삭제 중…"
+        }
+    }
+}
+
+/// 확인 다이얼로그를 기다리는 삭제 작업.
+///
+/// 삭제는 확인을 받기 전에 어떤 git 명령도 실행하지 않는다. 미병합 판정만은 `-d` 를
+/// 실제로 시도해야 알 수 있으므로, 그 실패를 받으면 `force: true` 로 이 상태를 다시 세워
+/// 재확인을 거친 뒤에야 `-D` 로 넘어간다.
+struct PendingBranchAction: Identifiable {
+    enum Kind: Equatable, Sendable {
+        case deleteLocalBranch(force: Bool)
+        case deleteRemoteBranch
+        case deleteLocalTag
+        case deleteRemoteTag
+    }
+
+    let kind: Kind
+    let group: MergedReferenceGroup
+    /// 확인을 받으면 실제로 지울 참조.
+    ///
+    /// 그룹에서 매번 다시 뽑지 않고 확정해 둔다. `-d` 가 일부 저장소에서만 미병합으로
+    /// 실패했을 때, 재확인은 실패한 저장소만 다시 겨냥해야 하기 때문이다.
+    let targets: [GitReference]
+    /// 이 작업이 실제로 닿는 저장소 이름. 여러 저장소에 걸친 그룹에서 어디가 바뀌는지 밝힌다.
+    let repositoryNames: [String]
+    let id = UUID()
+
+    var title: String {
+        switch kind {
+        case .deleteLocalBranch(let force):
+            return force
+                ? "'\(group.shortName)'에 병합되지 않은 커밋이 있습니다"
+                : "'\(group.shortName)' 브랜치를 삭제할까요?"
+        case .deleteRemoteBranch:
+            return "원격 브랜치 '\(group.shortName)'을 삭제할까요?"
+        case .deleteLocalTag:
+            return "태그 '\(group.shortName)'을 삭제할까요?"
+        case .deleteRemoteTag:
+            return "원격에서 태그 '\(group.shortName)'을 삭제할까요?"
+        }
+    }
+
+    var message: String {
+        switch kind {
+        case .deleteLocalBranch(let force):
+            return force
+                ? "그래도 삭제하면 이 브랜치에만 있는 커밋이 사라집니다.\(scopeSuffix)"
+                : "로컬 브랜치를 삭제합니다.\(scopeSuffix)"
+        case .deleteRemoteBranch:
+            return "원격에서 브랜치를 지웁니다. 되돌릴 수 없습니다.\(scopeSuffix)"
+        case .deleteLocalTag:
+            return "로컬 태그를 삭제합니다. 원격에 올라간 태그는 그대로 남습니다.\(scopeSuffix)"
+        case .deleteRemoteTag:
+            return "원격에서 태그를 지웁니다. 되돌릴 수 없습니다.\(scopeSuffix)"
+        }
+    }
+
+    var confirmTitle: String {
+        if case .deleteLocalBranch(force: true) = kind { return "강제 삭제" }
+        return "삭제"
+    }
+
+    /// 대상 저장소를 밝히는 꼬리말. 저장소가 하나뿐이면 굳이 이름을 붙이지 않는다.
+    private var scopeSuffix: String {
+        guard repositoryNames.count > 1 else { return "" }
+        return "\n\n대상 저장소 \(repositoryNames.count)개 — \(repositoryNames.joined(separator: ", "))"
+    }
 }
 
 struct GitRemoteOperation: Equatable, Sendable {
@@ -204,6 +291,53 @@ struct MergedReferenceGroup: Identifiable, Hashable, Sendable {
     var pushTargets: [GitReference] {
         guard kind == .local else { return [] }
         return references.filter(\.hasLivingUpstream)
+    }
+
+    /// Fast-Forward Pull 을 실행할 수 있는 참조.
+    ///
+    /// `git fetch <remote> <remoteRef>:<localRef>` 는 체크아웃된 브랜치를 대상으로 거부되므로
+    /// 현재 브랜치는 빠진다(그쪽은 `pullTargets` 다). 뒤처진 커밋이 없으면 할 일이 없으므로
+    /// 메뉴도 켜지 않는다.
+    var fastForwardPullTargets: [GitReference] {
+        guard kind == .local else { return [] }
+        return references.filter {
+            !$0.isCurrent && $0.hasLivingUpstream && ($0.tracking?.behindCount ?? 0) > 0
+        }
+    }
+
+    /// `push -u` 로 새로 게시할 수 있는 참조. upstream 이 아예 없는 브랜치만 해당한다.
+    ///
+    /// upstream 이 있었는데 원격에서 사라진(`isGone`) 브랜치는 게시가 아니라 삭제된 원격을
+    /// 정리해야 하는 상황이므로 여기 넣지 않는다.
+    var publishTargets: [GitReference] {
+        guard kind == .local else { return [] }
+        return references.filter { $0.tracking == nil }
+    }
+
+    /// 현재 브랜치를 이 그룹 위로 rebase 할 수 있는 참조.
+    ///
+    /// 체크아웃된 브랜치를 자기 자신 위로 rebase 할 수는 없으므로 그 저장소는 빠진다.
+    /// 대상 브랜치가 있는 저장소만 참조로 잡히므로, "현재 브랜치와 대상이 둘 다 있는
+    /// 저장소에서만" 이라는 규칙이 이 필터 하나로 지켜진다.
+    var rebaseOntoTargets: [GitReference] {
+        guard kind == .local else { return [] }
+        return references.filter { !$0.isCurrent }
+    }
+
+    /// 삭제할 수 있는 로컬 브랜치. 체크아웃된 브랜치는 git 이 거부하므로 미리 뺀다.
+    var deletableLocalReferences: [GitReference] {
+        guard kind == .local else { return [] }
+        return references.filter { !$0.isCurrent }
+    }
+
+    /// 삭제할 수 있는 원격 브랜치. 원격 브랜치 그룹은 참조 전체가 대상이다.
+    var deletableRemoteReferences: [GitReference] {
+        kind == .remote ? references : []
+    }
+
+    /// 삭제할 수 있는 태그. 태그 그룹은 참조 전체가 대상이다.
+    var deletableTagReferences: [GitReference] {
+        kind == .tag ? references : []
     }
 }
 
