@@ -94,7 +94,7 @@ actor GitRemoteService {
         guard currentBranch == reference.shortName else {
             throw GitRemoteServiceError.currentBranchRequired
         }
-        guard !(await isRebaseInProgress(repository: repository)) else {
+        guard !(await runner.isRebaseInProgress(repositoryURL: repository.rootURL)) else {
             throw GitRemoteServiceError.remoteOperationInProgress
         }
 
@@ -106,23 +106,18 @@ actor GitRemoteService {
                 exclusive: true
             )
         } catch {
-            if await isRebaseInProgress(repository: repository) {
-                let originalMessage = error.localizedDescription
-                do {
-                    _ = try await runner.runText(
-                        repositoryURL: repository.rootURL,
-                        arguments: ["rebase", "--abort"],
-                        timeout: Self.localWriteTimeout,
-                        exclusive: true
-                    )
-                    throw GitRemoteServiceError.rebaseAborted(originalMessage)
-                } catch let serviceError as GitRemoteServiceError {
-                    throw serviceError
-                } catch {
-                    throw GitRemoteServiceError.rebaseNeedsAttention(originalMessage)
-                }
+            let originalMessage = error.localizedDescription
+            switch await runner.recoverFromFailedRebase(
+                repositoryURL: repository.rootURL,
+                timeout: Self.localWriteTimeout
+            ) {
+            case .notInRebase:
+                throw error
+            case .aborted:
+                throw GitRemoteServiceError.rebaseAborted(originalMessage)
+            case .abortFailed:
+                throw GitRemoteServiceError.rebaseNeedsAttention(originalMessage)
             }
-            throw error
         }
     }
 
@@ -158,33 +153,5 @@ actor GitRemoteService {
             throw GitRemoteServiceError.upstreamRequired
         }
         return tracking
-    }
-
-    /// rebase 가 지금 진행 중인지 본다.
-    ///
-    /// `REBASE_HEAD` 는 rebase 가 정상적으로 끝난 뒤에도 남아 있어 판정에 쓸 수 없다.
-    /// 실제로 진행 중일 때만 존재하는 `rebase-merge`·`rebase-apply` 디렉터리로 확인한다.
-    /// 경로는 `--git-path` 로 물어봐 worktree 나 분리된 gitdir 에서도 맞게 나온다.
-    private func isRebaseInProgress(repository: GitRepository) async -> Bool {
-        for stateDirectory in ["rebase-merge", "rebase-apply"] {
-            guard let path = try? await runner.runText(
-                repositoryURL: repository.rootURL,
-                arguments: ["rev-parse", "--git-path", stateDirectory],
-                maximumBytes: 4_096
-            ).trimmingCharacters(in: .whitespacesAndNewlines), !path.isEmpty else {
-                continue
-            }
-
-            // 상대 경로로 나오면 git 을 실행한 저장소 루트 기준이다.
-            let url = path.hasPrefix("/")
-                ? URL(fileURLWithPath: path)
-                : repository.rootURL.appendingPathComponent(path)
-            var isDirectory: ObjCBool = false
-            if FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory),
-               isDirectory.boolValue {
-                return true
-            }
-        }
-        return false
     }
 }

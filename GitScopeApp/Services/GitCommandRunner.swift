@@ -317,3 +317,71 @@ struct GitCommandRunner: Sendable {
         }
     }
 }
+
+/// 실패한 rebase 를 되돌리려 시도한 결과.
+enum GitRebaseRecovery: Sendable {
+    /// 애초에 rebase 중간 상태로 들어가지도 않았다. 저장소는 그대로다.
+    case notInRebase
+    /// `rebase --abort` 로 되돌렸다.
+    case aborted
+    /// 되돌리지 못했다. 저장소가 rebase 중간 상태로 남아 있으므로 사용자에게 알려야 한다.
+    case abortFailed
+}
+
+/// rebase 상태 판정과 복구.
+///
+/// `GitRemoteService`(pull --rebase)와 `GitBranchService`(rebase) 가 같은 규칙을 써야 하므로
+/// 실행기 쪽에 한 번만 둔다.
+extension GitCommandRunner {
+    /// rebase 가 지금 진행 중인지 본다.
+    ///
+    /// `REBASE_HEAD` 는 rebase 가 정상적으로 끝난 뒤에도 남아 있어 판정에 쓸 수 없다.
+    /// 실제로 진행 중일 때만 존재하는 `rebase-merge`·`rebase-apply` 디렉터리로 확인한다.
+    /// 경로는 `--git-path` 로 물어봐 worktree 나 분리된 gitdir 에서도 맞게 나온다.
+    func isRebaseInProgress(repositoryURL: URL) async -> Bool {
+        for stateDirectory in ["rebase-merge", "rebase-apply"] {
+            guard let path = try? await runText(
+                repositoryURL: repositoryURL,
+                arguments: ["rev-parse", "--git-path", stateDirectory],
+                maximumBytes: 4_096
+            ).trimmingCharacters(in: .whitespacesAndNewlines), !path.isEmpty else {
+                continue
+            }
+
+            // 상대 경로로 나오면 git 을 실행한 저장소 루트 기준이다.
+            let url = path.hasPrefix("/")
+                ? URL(fileURLWithPath: path)
+                : repositoryURL.appendingPathComponent(path)
+            var isDirectory: ObjCBool = false
+            if FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory),
+               isDirectory.boolValue {
+                return true
+            }
+        }
+        return false
+    }
+
+    /// rebase 를 동반한 명령이 실패한 뒤, 저장소를 rebase 중간 상태로 남기지 않도록 되돌린다.
+    ///
+    /// 호출자는 결과에 따라 자기 도메인의 에러로 옮겨 담는다. 여기서 던지지 않는 것은
+    /// 복구 실패도 "알려야 할 결말"이지 예외 상황이 아니기 때문이다.
+    func recoverFromFailedRebase(
+        repositoryURL: URL,
+        timeout: TimeInterval
+    ) async -> GitRebaseRecovery {
+        guard await isRebaseInProgress(repositoryURL: repositoryURL) else {
+            return .notInRebase
+        }
+        do {
+            _ = try await runText(
+                repositoryURL: repositoryURL,
+                arguments: ["rebase", "--abort"],
+                timeout: timeout,
+                exclusive: true
+            )
+            return .aborted
+        } catch {
+            return .abortFailed
+        }
+    }
+}
