@@ -31,6 +31,10 @@ Homebrew를 사용하지 않는 경우 [GitHub Releases](https://github.com/hong
 - 로컬/원격 브랜치와 태그 표시
 - 로컬 브랜치의 upstream 및 ahead/behind 커밋 수 표시
 - 브랜치 우클릭 메뉴에서 rebase pull 및 upstream push
+- 체크아웃하지 않은 브랜치의 fast-forward pull
+- upstream이 없는 브랜치를 push로 게시하며 upstream 자동 설정
+- 현재 브랜치를 다른 브랜치 위로 rebase, 충돌 시 자동으로 되돌리기
+- 로컬 브랜치, 원격 브랜치, 태그 삭제 (확인 다이얼로그와 미병합 경고)
 - `⌘R`로 모든 저장소에서 `fetch --all` 실행 후 로그 새로고침
 - 설정한 주기와 창 복귀 시점에 자동으로 `fetch --all` 실행, 원격에 변화가 있을 때만 조용히 목록 갱신
 - 여러 저장소의 커밋을 하나의 타임라인으로 병합
@@ -53,7 +57,7 @@ Homebrew를 사용하지 않는 경우 [GitHub Releases](https://github.com/hong
 - Git 로그 초기 로딩 화면과 부드러운 상태 전환
 - Sparkle 기반 자동 업데이트 확인과 앱 내 설치
 
-commit, checkout, merge, force push 기능은 포함하지 않습니다. Pull은 현재 체크아웃되어 있고 upstream이 설정된 브랜치에 `--rebase` 방식으로 실행됩니다.
+commit, checkout, merge, force push 기능은 포함하지 않습니다. Pull은 현재 체크아웃된 브랜치에는 `--rebase` 방식으로, 그 외 로컬 브랜치에는 fast-forward 방식으로만 실행됩니다. rebase 중 충돌이 나면 자동으로 `rebase --abort`를 실행해 저장소를 원래 상태로 되돌립니다.
 
 공개 GitHub 저장소의 Actions 상태는 별도 설정 없이 조회합니다. 비공개 저장소는 [GitHub CLI](https://cli.github.com/)가 설치되어 있고 `gh auth login`으로 로그인되어 있으면 기존 Keychain 인증을 재사용합니다. 토큰은 GitScope 설정이나 파일에 별도로 저장하지 않습니다.
 
