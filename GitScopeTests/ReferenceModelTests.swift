@@ -95,6 +95,117 @@ final class ReferenceModelTests: XCTestCase {
         )
     }
 
+    func testFastForwardPullTargetsExcludeCurrentAndUpToDateBranches() {
+        let group = MergedReferenceGroup(
+            kind: .local,
+            shortName: "main",
+            references: [
+                // 뒤처져 있고 체크아웃도 안 됐다 — 유일한 대상.
+                reference("main", repositoryPath: "/a", upstream: "origin/main", behind: 2),
+                // 체크아웃돼 있으면 git 이 이 refspec 을 거부한다.
+                reference(
+                    "main",
+                    repositoryPath: "/b",
+                    isCurrent: true,
+                    upstream: "origin/main",
+                    behind: 2
+                ),
+                // 이미 최신이라 당겨 올 것이 없다.
+                reference("main", repositoryPath: "/c", upstream: "origin/main"),
+                // upstream 이 없거나 사라졌으면 향할 곳이 없다.
+                reference("main", repositoryPath: "/d"),
+                reference(
+                    "main",
+                    repositoryPath: "/e",
+                    upstream: "origin/main",
+                    isGone: true,
+                    behind: 2
+                )
+            ]
+        )
+
+        XCTAssertEqual(group.fastForwardPullTargets.map(\.repositoryID.rawValue), ["/a"])
+    }
+
+    func testPublishTargetsRequireNoUpstreamAtAll() {
+        let group = MergedReferenceGroup(
+            kind: .local,
+            shortName: "main",
+            references: [
+                reference("main", repositoryPath: "/a"),
+                reference("main", repositoryPath: "/b", upstream: "origin/main"),
+                // upstream 이 사라진 브랜치는 새로 게시할 것이 아니라 정리할 대상이다.
+                reference("main", repositoryPath: "/c", upstream: "origin/main", isGone: true)
+            ]
+        )
+
+        XCTAssertEqual(group.publishTargets.map(\.repositoryID.rawValue), ["/a"])
+    }
+
+    func testRebaseAndDeleteTargetsExcludeCheckedOutBranch() {
+        let group = MergedReferenceGroup(
+            kind: .local,
+            shortName: "main",
+            references: [
+                reference("main", repositoryPath: "/a"),
+                reference("main", repositoryPath: "/b", isCurrent: true)
+            ]
+        )
+
+        XCTAssertEqual(group.rebaseOntoTargets.map(\.repositoryID.rawValue), ["/a"])
+        XCTAssertEqual(group.deletableLocalReferences.map(\.repositoryID.rawValue), ["/a"])
+    }
+
+    func testRemoteAndTagGroupsAreDeletableInWhole() {
+        let remote = MergedReferenceGroup(
+            kind: .remote,
+            shortName: "origin/main",
+            references: [
+                reference("origin/main", kind: .remote, repositoryPath: "/a"),
+                reference("origin/main", kind: .remote, repositoryPath: "/b")
+            ]
+        )
+        let tag = MergedReferenceGroup(
+            kind: .tag,
+            shortName: "v1.0",
+            references: [reference("v1.0", kind: .tag, repositoryPath: "/a")]
+        )
+        let local = MergedReferenceGroup(
+            kind: .local,
+            shortName: "main",
+            references: [reference("main", repositoryPath: "/a")]
+        )
+
+        XCTAssertEqual(remote.deletableRemoteReferences.count, 2)
+        XCTAssertTrue(remote.deletableTagReferences.isEmpty)
+        XCTAssertTrue(remote.deletableLocalReferences.isEmpty)
+        XCTAssertEqual(tag.deletableTagReferences.count, 1)
+        XCTAssertTrue(tag.deletableRemoteReferences.isEmpty)
+        XCTAssertTrue(local.deletableRemoteReferences.isEmpty)
+        XCTAssertTrue(local.deletableTagReferences.isEmpty)
+    }
+
+    func testRemoteAndTagGroupsHaveNoLocalBranchTargets() {
+        let remote = MergedReferenceGroup(
+            kind: .remote,
+            shortName: "origin/main",
+            references: [
+                reference("origin/main", kind: .remote, repositoryPath: "/a", upstream: nil)
+            ]
+        )
+        let tag = MergedReferenceGroup(
+            kind: .tag,
+            shortName: "v1.0",
+            references: [reference("v1.0", kind: .tag, repositoryPath: "/a")]
+        )
+
+        for group in [remote, tag] {
+            XCTAssertTrue(group.fastForwardPullTargets.isEmpty)
+            XCTAssertTrue(group.publishTargets.isEmpty)
+            XCTAssertTrue(group.rebaseOntoTargets.isEmpty)
+        }
+    }
+
     func testRemoteAndTagGroupsHaveNoRemoteOperationTargets() {
         let remote = MergedReferenceGroup(
             kind: .remote,
@@ -152,7 +263,8 @@ final class ReferenceModelTests: XCTestCase {
         repositoryPath: String = "/a",
         isCurrent: Bool = false,
         upstream: String? = nil,
-        isGone: Bool = false
+        isGone: Bool = false,
+        behind: Int = 0
     ) -> GitReference {
         GitReference(
             repositoryID: RepositoryID(rawValue: repositoryPath),
@@ -168,7 +280,7 @@ final class ReferenceModelTests: XCTestCase {
                     remoteName: "origin",
                     remoteRef: "refs/heads/\(shortName)",
                     aheadCount: 0,
-                    behindCount: 0,
+                    behindCount: behind,
                     isGone: isGone
                 )
             }
