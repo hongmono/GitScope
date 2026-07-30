@@ -87,10 +87,22 @@ struct ReferenceRow: View {
         }
         .tag(SidebarSelection.reference(group.id))
         .contextMenu {
-            if group.kind == .local {
-                branchContextMenu
+            switch group.kind {
+            case .local: branchContextMenu
+            case .remote: remoteBranchContextMenu
+            case .tag: tagContextMenu
             }
         }
+    }
+
+    /// 진행 중인 작업이 있으면 저장소를 바꾸는 항목은 전부 잠근다.
+    private var isBusy: Bool {
+        model.remoteOperation != nil
+    }
+
+    /// 메뉴 항목 문구. 그 작업이 지금 돌고 있으면 진행 중 문구로 바꾼다.
+    private func actionTitle(_ title: String, for kind: GitRemoteOperationKind) -> String {
+        model.remoteOperation?.kind == kind ? kind.progressTitle : title
     }
 
     private var isSelected: Bool {
@@ -187,37 +199,115 @@ struct ReferenceRow: View {
             model.pullRebase(group)
         } label: {
             Label(
-                model.remoteOperation?.kind == .pull
-                    ? "Pull 중…"
-                    : "Pull (Rebase)",
+                actionTitle("Pull (Rebase)", for: .pull),
                 systemImage: "arrow.down"
             )
         }
-        .disabled(
-            model.remoteOperation != nil
-                || group.pullTargets.isEmpty
-        )
+        .disabled(isBusy || group.pullTargets.isEmpty)
+
+        Button {
+            model.fastForwardPull(group)
+        } label: {
+            Label(
+                actionTitle("Pull (Fast-Forward)", for: .fastForwardPull),
+                systemImage: "arrow.down.to.line"
+            )
+        }
+        .disabled(isBusy || group.fastForwardPullTargets.isEmpty)
 
         Button {
             model.push(group)
         } label: {
             Label(
-                model.remoteOperation?.kind == .push
-                    ? "Push 중…"
-                    : "Push",
+                actionTitle("Push", for: .push),
                 systemImage: "arrow.up"
             )
         }
-        .disabled(
-            model.remoteOperation != nil
-                || group.pushTargets.isEmpty
-        )
+        .disabled(isBusy || group.pushTargets.isEmpty)
 
-        if group.pullTargets.isEmpty {
+        Button {
+            model.publish(group)
+        } label: {
+            Label(
+                actionTitle("Push (Upstream 설정)", for: .publish),
+                systemImage: "arrow.up.to.line"
+            )
+        }
+        .disabled(isBusy || group.publishTargets.isEmpty)
+
+        Divider()
+
+        Button {
+            model.rebaseCurrentBranch(onto: group)
+        } label: {
+            Label(
+                actionTitle(rebaseTitle, for: .rebase),
+                systemImage: "arrow.triangle.branch"
+            )
+        }
+        .disabled(isBusy || group.rebaseOntoTargets.isEmpty)
+
+        Divider()
+
+        Button(role: .destructive) {
+            model.requestDeleteLocalBranch(group)
+        } label: {
+            Label(
+                actionTitle("브랜치 삭제…", for: .deleteLocalBranch),
+                systemImage: "trash"
+            )
+        }
+        .disabled(isBusy || group.deletableLocalReferences.isEmpty)
+
+        if group.pullTargets.isEmpty, group.fastForwardPullTargets.isEmpty {
             Divider()
-            Button("Pull은 현재 브랜치에서만 가능") {}
+            Button("Pull할 upstream이 없거나 이미 최신") {}
                 .disabled(true)
         }
+    }
+
+    /// rebase 항목 문구. 어느 브랜치가 어디로 옮겨지는지 이름으로 밝힌다.
+    private var rebaseTitle: String {
+        guard let currentName = model.currentBranchName(forRebaseOnto: group) else {
+            return "현재 브랜치를 이 브랜치 위로 Rebase"
+        }
+        return "'\(currentName)'를 '\(group.shortName)' 위로 Rebase"
+    }
+
+    @ViewBuilder
+    private var remoteBranchContextMenu: some View {
+        Button(role: .destructive) {
+            model.requestDeleteRemoteBranch(group)
+        } label: {
+            Label(
+                actionTitle("원격 브랜치 삭제…", for: .deleteRemoteBranch),
+                systemImage: "trash"
+            )
+        }
+        .disabled(isBusy || group.deletableRemoteReferences.isEmpty)
+    }
+
+    @ViewBuilder
+    private var tagContextMenu: some View {
+        Button(role: .destructive) {
+            model.requestDeleteLocalTag(group)
+        } label: {
+            Label(
+                actionTitle("태그 삭제…", for: .deleteLocalTag),
+                systemImage: "trash"
+            )
+        }
+        .disabled(isBusy || group.deletableTagReferences.isEmpty)
+
+        Button(role: .destructive) {
+            model.requestDeleteRemoteTag(group)
+        } label: {
+            Label(
+                actionTitle("원격에서 태그 삭제…", for: .deleteRemoteTag),
+                systemImage: "trash.slash"
+            )
+        }
+        .disabled(isBusy || group.deletableTagReferences.isEmpty)
     }
 
     private var groupTrackingSummary: String {

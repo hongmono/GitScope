@@ -236,6 +236,7 @@ struct ContentView: View {
                     .transition(.opacity)
             }
         }
+        .modifier(BranchActionConfirmation(model: model))
     }
 }
 
@@ -524,5 +525,37 @@ private struct WelcomeView: View {
             .keyboardShortcut(.defaultAction)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+}
+
+/// 삭제 확인 다이얼로그.
+///
+/// 오류 얼럿과 같은 뷰에 겹쳐 달면 둘 중 하나가 묻히므로 분할 뷰 쪽에 따로 붙인다.
+/// 이 다이얼로그에서 확인을 받기 전에는 어떤 git 삭제 명령도 실행되지 않는다.
+private struct BranchActionConfirmation: ViewModifier {
+    var model: AppModel
+
+    func body(content: Content) -> some View {
+        // 표시 여부와 문구가 모두 이 값 하나에서 나온다. 아래 클로저 안에서만 읽으면
+        // 관찰에 잡히지 않으므로 body 평가 중인 여기서 한 번 읽어 둔다.
+        let action = model.pendingBranchAction
+
+        return content.alert(
+            action?.title ?? "",
+            isPresented: Binding(
+                get: { action != nil },
+                set: { if !$0 { model.cancelPendingBranchAction() } }
+            ),
+            presenting: action
+        ) { action in
+            Button(action.confirmTitle, role: .destructive) {
+                model.confirmPendingBranchAction()
+            }
+            Button("취소", role: .cancel) {
+                model.cancelPendingBranchAction()
+            }
+        } message: { action in
+            Text(action.message)
+        }
     }
 }
