@@ -8,7 +8,7 @@ import SwiftUI
 @MainActor
 final class VisibleCommitGraphView: NSView {
     private var rows: [CommitRow] = []
-    private var selectedCommitID: CommitID?
+    private var selectedCommitIDs: Set<CommitID> = []
     private var laneSpacing: CGFloat = 18
     private var contentOffsetY: CGFloat = 0
     private let avatarCache = NSCache<NSString, NSImage>()
@@ -64,13 +64,13 @@ final class VisibleCommitGraphView: NSView {
 
     func configure(
         rows: [CommitRow],
-        selectedCommitID: CommitID?,
+        selectedCommitIDs: Set<CommitID>,
         laneSpacing: CGFloat,
         contentOffsetY: CGFloat,
         showsRemoteAvatars: Bool
     ) {
         self.rows = rows
-        self.selectedCommitID = selectedCommitID
+        self.selectedCommitIDs = selectedCommitIDs
         self.laneSpacing = laneSpacing
         self.contentOffsetY = contentOffsetY
         self.showsRemoteAvatars = showsRemoteAvatars
@@ -112,7 +112,7 @@ final class VisibleCommitGraphView: NSView {
         for index in visibleRange {
             drawNode(
                 for: rows[index],
-                isSelected: selectedCommitID == rows[index].id,
+                isSelected: selectedCommitIDs.contains(rows[index].id),
                 rowFrame: frameForRow(at: index),
                 in: context
             )

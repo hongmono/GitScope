@@ -45,16 +45,14 @@ struct HistoryView: View {
             } else {
                 VirtualizedHistoryList(
                     rows: model.rows,
-                    selectedCommitID: model.selectedCommit?.id,
+                    selectedCommitIDs: model.selectedCommitIDs,
                     graphColumnWidth: graphColumnWidth,
                     graphLaneCount: graphLaneCount,
                     showsRepositoryColumn: model.repositories.count > 1,
                     repositoryColorIndices: repositoryColorIndices,
                     githubActionsByCommit: model.githubActionsByCommit
-                ) { commit in
-                    model.selectCommit(commit)
-                } onClearSelection: {
-                    model.clearSelection()
+                ) { commits in
+                    model.selectCommits(commits)
                 } onVisibleGraphLaneCountChange: { laneCount in
                     visibleGraphLaneCount = laneCount
                 }

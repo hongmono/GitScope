@@ -568,6 +568,190 @@ struct CommitDetails: Sendable {
     let files: [ChangedFile]
 }
 
+/// 여러 커밋의 변경 파일을 합집합으로 묶은 항목.
+///
+/// 같은 저장소의 같은 경로는 커밋이 몇 개든 한 항목이 된다. 뷰에서 조립하면 선택이 바뀔
+/// 때마다 화면을 그리며 다시 묶게 되므로 모델 계층에 두고 `merge(_:)` 한 곳에서만 만든다.
+struct MergedChangedFile: Identifiable, Hashable, Sendable {
+    let repositoryID: RepositoryID
+    let path: String
+    /// 커밋별 상태를 중복 없이 모은 목록. 순서는 커밋 순서(오래된 순)를 따른다.
+    /// 상태가 섞였음을 툴팁으로 알리는 데 쓴다.
+    let statuses: [String]
+    /// 목록에 배지로 그리는 대표 상태. 마지막(가장 최근) 커밋의 상태다.
+    ///
+    /// `statuses` 에서 뽑지 않고 따로 둔다. 중복을 지우고 나면 M → D → M 처럼 되돌아온
+    /// 경우에 마지막 원소가 마지막 커밋의 상태와 어긋나기 때문이다.
+    let representativeStatus: String
+    /// 이 파일을 건드린 선택 커밋. 오래된 순이라 patch 를 이 순서로 이어붙이면 된다.
+    let commits: [GitCommit]
+    /// patch 를 뽑을 때 넘길 커밋별 원본 항목. 커밋마다 상태와 rename 경로가 다르다.
+    let changedFilesByCommit: [CommitID: ChangedFile]
+
+    var id: String { "\(repositoryID.rawValue)::\(path)" }
+
+    /// 상태가 커밋마다 다를 때만 전체를 늘어놓는다. 하나뿐이면 배지와 같은 내용이라 숨긴다.
+    var statusTooltip: String? {
+        guard statuses.count > 1 else { return nil }
+        return "커밋별 상태 — \(statuses.joined(separator: ", "))"
+    }
+
+    /// 선택한 커밋들의 변경 파일을 합집합으로 묶는다.
+    ///
+    /// - 같은 경로는 한 항목으로 합치고, 그 파일을 건드린 커밋을 오래된 순으로 모은다.
+    /// - 저장소는 `detailsList` 에 처음 나온 차례(=선택 순서)로 두고, 저장소 안에서는
+    ///   경로 이름순으로 정렬한다. 저장소별 섹션을 그리는 쪽이 다시 묶지 않아도 되도록
+    ///   같은 저장소의 파일은 반드시 붙어 있게 한다.
+    ///
+    /// - Parameter detailsList: 히스토리 목록 순서(최신 먼저)의 선택 커밋 details.
+    static func merge(_ detailsList: [CommitDetails]) -> [MergedChangedFile] {
+        // 커밋 정렬은 `committerDate` 기준이다. 다만 스크립트나 빠른 연속 커밋은 초 단위가
+        // 같아지는 일이 흔해 시각만으로는 앞뒤가 갈리지 않는다. 그럴 때는 목록 순서를 따른다
+        // — 목록은 최신이 위이므로, 뒤에 온 커밋일수록 더 오래된 커밋이다.
+        let orderedDetails = detailsList.enumerated().sorted { first, second in
+            if first.element.commit.committerDate != second.element.commit.committerDate {
+                return first.element.commit.committerDate < second.element.commit.committerDate
+            }
+            return first.offset > second.offset
+        }
+        .map(\.element)
+
+        var repositoryOrder: [RepositoryID] = []
+        var seenRepositoryIDs = Set<RepositoryID>()
+        for details in detailsList where seenRepositoryIDs.insert(details.commit.id.repositoryID).inserted {
+            repositoryOrder.append(details.commit.id.repositoryID)
+        }
+
+        var accumulators: [String: Accumulator] = [:]
+        var keysByRepository: [RepositoryID: [String]] = [:]
+        for details in orderedDetails {
+            let repositoryID = details.commit.id.repositoryID
+            for file in details.files {
+                let key = "\(repositoryID.rawValue)::\(file.path)"
+                if accumulators[key] == nil {
+                    accumulators[key] = Accumulator(
+                        repositoryID: repositoryID,
+                        path: file.path
+                    )
+                    keysByRepository[repositoryID, default: []].append(key)
+                }
+                accumulators[key]?.append(file: file, commit: details.commit)
+            }
+        }
+
+        return repositoryOrder.flatMap { repositoryID in
+            (keysByRepository[repositoryID] ?? [])
+                .compactMap { accumulators[$0]?.snapshot() }
+                .sorted { $0.path.localizedStandardCompare($1.path) == .orderedAscending }
+        }
+    }
+
+    /// 병합 도중에만 쓰는 누적기. 완성되면 `snapshot()` 으로 값 타입이 된다.
+    private struct Accumulator {
+        let repositoryID: RepositoryID
+        let path: String
+        var statuses: [String] = []
+        var commits: [GitCommit] = []
+        var changedFilesByCommit: [CommitID: ChangedFile] = [:]
+
+        mutating func append(file: ChangedFile, commit: GitCommit) {
+            if !statuses.contains(file.status) {
+                statuses.append(file.status)
+            }
+            commits.append(commit)
+            changedFilesByCommit[commit.id] = file
+        }
+
+        func snapshot() -> MergedChangedFile {
+            MergedChangedFile(
+                repositoryID: repositoryID,
+                path: path,
+                statuses: statuses,
+                representativeStatus: commits.last
+                    .flatMap { changedFilesByCommit[$0.id]?.status } ?? "",
+                commits: commits,
+                changedFilesByCommit: changedFilesByCommit
+            )
+        }
+    }
+}
+
+/// 커밋 다중 선택의 정규화 규칙.
+///
+/// 작업 중 행 제약과 순서 정렬은 델리게이트가 아니라 여기 한 곳에만 둔다. 뷰가 알려 준
+/// 선택을 그대로 믿으면 ⌘클릭 조합마다 같은 규칙을 다시 구현하게 된다.
+enum CommitSelection {
+    /// - Parameter rowOrder: 히스토리 목록에 지금 보이는 행의 ID. 선택은 이 차례로 정렬된다.
+    /// - Returns: 작업 중 커밋이 섞이면 그 커밋 하나. 아니면 목록 순서로 정렬한 선택.
+    static func normalize<Rows: Sequence>(
+        _ commits: [GitCommit],
+        rowOrder: Rows
+    ) -> [GitCommit] where Rows.Element == CommitID {
+        // 작업 중 행은 커밋이 아니라 워킹 트리라 다른 커밋과 합집합을 만들 수 없다.
+        // 어느 쪽에서 들어오든 그 행 하나의 단일 선택으로 접는다.
+        if let workingTree = commits.first(where: \.isWorkingTree) { return [workingTree] }
+        guard commits.count > 1 else { return commits }
+
+        var remaining = Dictionary(
+            commits.map { ($0.id, $0) },
+            uniquingKeysWith: { first, _ in first }
+        )
+        var ordered: [GitCommit] = []
+        ordered.reserveCapacity(remaining.count)
+        for id in rowOrder {
+            guard let commit = remaining.removeValue(forKey: id) else { continue }
+            ordered.append(commit)
+        }
+        // 목록에서 사라진(필터에 걸린) 커밋은 원래 순서대로 뒤에 붙인다.
+        ordered.append(contentsOf: commits.compactMap { remaining.removeValue(forKey: $0.id) })
+        return ordered
+    }
+
+    /// 조용한 갱신 뒤 되살릴 커밋.
+    ///
+    /// rebase·amend 로 사라진 커밋은 빼고 남은 것만, 갱신 전 선택 순서대로 돌려준다.
+    /// 커밋 인스턴스는 새로 읽은 것으로 바꿔 브랜치·태그 배지를 최신화한다.
+    ///
+    /// - Parameter survivingIDs: 갱신 뒤에도 목록에 남아 있다고 판단된 커밋의 ID.
+    static func restorable(
+        commitIDs: [CommitID],
+        survivingIDs: Set<CommitID>,
+        in commits: [GitCommit]
+    ) -> [GitCommit] {
+        commitIDs.compactMap { commitID in
+            guard survivingIDs.contains(commitID) else { return nil }
+            return commits.first { $0.id == commitID }
+        }
+    }
+}
+
+/// 이어붙일 커밋 하나의 patch.
+struct CommitPatchSection: Sendable {
+    let commit: GitCommit
+    let patch: String
+}
+
+extension CommitPatchSection {
+    /// 커밋별 patch 를 넘어온 순서(오래된 순)대로 이어붙인다.
+    ///
+    /// - Parameter showsCommitHeaders: 커밋이 둘 이상일 때만 참. 단일 커밋에 헤더를 붙이면
+    ///   기존 단일 선택 화면과 달라지므로 patch 하나를 그대로 돌려준다.
+    static func join(_ sections: [CommitPatchSection], showsCommitHeaders: Bool) -> String {
+        sections
+            .map { section in
+                guard showsCommitHeaders else { return section.patch }
+                let subject = section.commit.subject.isEmpty
+                    ? "(메시지 없음)"
+                    : section.commit.subject
+                return """
+                    \(DiffLine.Kind.commitHeaderPrefix)\(section.commit.shortOID) \(subject)
+                    \(section.patch)
+                    """
+            }
+            .joined(separator: "\n")
+    }
+}
+
 /// 사전 파싱된 diff 패치 한 줄.
 ///
 /// SwiftUI body 는 여러 번 재평가되므로 표시 시점에 패치 문자열을 줄로 분해하면 큰 패치에서
@@ -579,6 +763,8 @@ struct DiffLine: Identifiable, Hashable, Sendable {
         case fileHeader
         /// `@@` 헝크 헤더.
         case hunkHeader
+        /// 다중 선택에서 이어붙인 patch 사이에 끼워 넣는 커밋 구분 헤더.
+        case commitHeader
         case addition
         case deletion
         case context
@@ -596,9 +782,15 @@ struct DiffLine: Identifiable, Hashable, Sendable {
 }
 
 extension DiffLine.Kind {
+    /// 커밋 구분 헤더의 접두사. patch 본문의 어떤 줄과도 겹치지 않도록 git 이 쓰지 않는
+    /// 문자를 골랐다. 이어붙이는 쪽과 분류하는 쪽이 같은 값을 쓰도록 여기 한 곳에 둔다.
+    static let commitHeaderPrefix = "― "
+
     /// 파일 헤더를 먼저 본다. `+++`/`---` 는 추가/삭제 접두사와 겹치기 때문이다.
     init(classifying line: String) {
-        if line.hasPrefix("+++") || line.hasPrefix("---") {
+        if line.hasPrefix(Self.commitHeaderPrefix) {
+            self = .commitHeader
+        } else if line.hasPrefix("+++") || line.hasPrefix("---") {
             self = .fileHeader
         } else if line.hasPrefix("@@") {
             self = .hunkHeader

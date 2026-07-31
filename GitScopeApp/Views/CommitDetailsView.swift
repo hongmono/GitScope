@@ -13,7 +13,7 @@ struct CommitDetailsView: View {
         .background(.clear)
         .animation(
             reduceMotion ? nil : .easeOut(duration: 0.14),
-            value: model.selectedCommit?.id
+            value: model.selectedCommits.map(\.id)
         )
         .animation(
             reduceMotion ? nil : .easeOut(duration: 0.12),
@@ -26,7 +26,7 @@ struct CommitDetailsView: View {
             PaneHeader(title: "변경 파일", systemImage: "doc.on.doc")
             Divider()
 
-            if model.selectedCommit == nil {
+            if model.selectedCommits.isEmpty {
                 InspectorUnavailableView(
                     title: "변경 사항을 확인할 커밋 선택",
                     systemImage: "doc.on.doc",
@@ -36,48 +36,27 @@ struct CommitDetailsView: View {
                 ProgressView()
                     .controlSize(.small)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else if let details = model.selectedDetails {
+            } else if !model.selectedDetailsList.isEmpty {
                 VStack(spacing: 0) {
-                    CommitSummary(commit: details.commit)
+                    if let commit = model.selectedCommit {
+                        CommitSummary(commit: commit)
+                    } else {
+                        MultiCommitSummary(
+                            commits: model.selectedCommits,
+                            fileCount: model.mergedChangedFiles.count
+                        )
+                    }
                     Divider()
-                    if details.files.isEmpty {
+                    if model.mergedChangedFiles.isEmpty {
                         InspectorUnavailableView(
                             title: "변경된 파일이 없습니다",
                             systemImage: "tray",
-                            description: "이 커밋은 파일 내용을 바꾸지 않았습니다."
+                            description: model.selectedCommit == nil
+                                ? "선택한 커밋들은 파일 내용을 바꾸지 않았습니다."
+                                : "이 커밋은 파일 내용을 바꾸지 않았습니다."
                         )
                     } else {
-                        ScrollView {
-                            LazyVStack(spacing: 0) {
-                                ForEach(details.files) { file in
-                                    Button {
-                                        model.selectChangedFile(file)
-                                    } label: {
-                                        HStack(spacing: 7) {
-                                            // rename/copy 는 "R100" 처럼 4글자라 11pt 고정폭 기준
-                                            // 약 27pt 가 필요하다. 좁으면 두 줄로 접혀 25pt 행 리듬이 깨진다.
-                                            Text(file.status)
-                                                .font(AppFont.badgeMono)
-                                                .foregroundStyle(statusColor(file.status))
-                                                .lineLimit(1)
-                                                .frame(width: 30, alignment: .leading)
-                                            Image(systemName: "doc.text")
-                                                .foregroundStyle(.secondary)
-                                            Text(file.path)
-                                                .font(AppFont.rowLabel)
-                                                .lineLimit(1)
-                                            Spacer(minLength: 0)
-                                        }
-                                        .padding(.horizontal, 9)
-                                        .frame(maxWidth: .infinity, minHeight: 25, alignment: .leading)
-                                        .appGlassSelection(model.selectedFile?.id == file.id)
-                                        .padding(.horizontal, 5)
-                                        .contentShape(Rectangle())
-                                    }
-                                    .buttonStyle(.plain)
-                                }
-                            }
-                        }
+                        changedFileList
                     }
                 }
             } else {
@@ -88,6 +67,53 @@ struct CommitDetailsView: View {
                 )
             }
         }
+    }
+
+    /// 합집합 파일 목록.
+    ///
+    /// 선택이 저장소 두 곳 이상에 걸칠 때만 저장소 이름으로 섹션을 나눈다. 하나뿐이면
+    /// 헤더를 숨기는 것은 히스토리에서 저장소 열을 숨기는 관례와 같다.
+    private var changedFileList: some View {
+        ScrollView {
+            LazyVStack(spacing: 0, pinnedViews: [.sectionHeaders]) {
+                ForEach(fileSections) { section in
+                    Section {
+                        ForEach(section.files) { file in
+                            ChangedFileRow(
+                                file: file,
+                                isSelected: model.selectedFile?.id == file.id
+                            ) {
+                                model.selectChangedFile(file)
+                            }
+                        }
+                    } header: {
+                        if model.selectionSpansMultipleRepositories {
+                            RepositorySectionHeader(
+                                name: model.repositoryNamesByID[section.repositoryID]
+                                    ?? section.repositoryID.rawValue
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// 합집합 목록을 저장소 경계에서 끊는다.
+    ///
+    /// 병합 함수가 같은 저장소의 파일을 붙여서 돌려주므로 다시 묶지 않고 훑기만 한다.
+    private var fileSections: [ChangedFileSection] {
+        var sections: [ChangedFileSection] = []
+        for file in model.mergedChangedFiles {
+            if sections.last?.repositoryID == file.repositoryID {
+                sections[sections.count - 1].files.append(file)
+            } else {
+                sections.append(
+                    ChangedFileSection(repositoryID: file.repositoryID, files: [file])
+                )
+            }
+        }
+        return sections
     }
 
     private var diffPane: some View {
@@ -105,11 +131,18 @@ struct CommitDetailsView: View {
                     githubChecks: model.selectedGitHubChecks,
                     isLoadingGitHubChecks: model.isLoadingSelectedGitHubChecks
                 )
-            } else if model.selectedCommit == nil {
+            } else if model.selectedCommits.isEmpty {
                 InspectorUnavailableView(
                     title: "커밋 세부 정보",
                     systemImage: "text.alignleft",
                     description: "커밋을 선택하면 메시지와 메타데이터가 여기에 표시됩니다."
+                )
+            } else if model.selectedFile == nil {
+                // 다중 선택에는 대표할 커밋 메시지가 없다. 파일을 고르라고만 안내한다.
+                InspectorUnavailableView(
+                    title: "커밋 \(model.selectedCommits.count)개 선택",
+                    systemImage: "square.stack.3d.up",
+                    description: "위 목록에서 파일을 고르면 커밋별 diff가 이어서 표시됩니다."
                 )
             } else if model.isLoadingPatch {
                 ProgressView()
@@ -125,6 +158,121 @@ struct CommitDetailsView: View {
                 )
             }
         }
+    }
+
+}
+
+/// 합집합 파일 목록에서 저장소 하나가 차지하는 구간.
+private struct ChangedFileSection: Identifiable {
+    let repositoryID: RepositoryID
+    var files: [MergedChangedFile]
+
+    var id: String { repositoryID.rawValue }
+}
+
+/// 다중 선택일 때 파일 목록 위에 오는 요약.
+///
+/// 커밋 목록은 좁은 인스펙터에서 화면을 다 먹지 않도록 높이를 묶고 따로 스크롤한다.
+private struct MultiCommitSummary: View {
+    let commits: [GitCommit]
+    let fileCount: Int
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            HStack(spacing: 6) {
+                Image(systemName: "square.stack.3d.up")
+                    .foregroundStyle(Color.accentColor)
+                Text("커밋 \(commits.count)개 선택 · 파일 \(fileCount)개")
+                    .font(AppFont.sectionTitle)
+                Spacer(minLength: 0)
+            }
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 3) {
+                    ForEach(commits) { commit in
+                        HStack(spacing: 6) {
+                            Text(commit.shortOID)
+                                .font(AppFont.monoSmall)
+                                .foregroundStyle(.secondary)
+                            Text(commit.subject.isEmpty ? "(메시지 없음)" : commit.subject)
+                                .font(AppFont.rowLabel)
+                                .lineLimit(1)
+                            Spacer(minLength: 0)
+                        }
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .frame(maxHeight: 96)
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+/// 저장소가 둘 이상 걸린 선택에서 파일 목록을 갈라 주는 머리글.
+private struct RepositorySectionHeader: View {
+    let name: String
+
+    var body: some View {
+        HStack(spacing: 5) {
+            Image(systemName: "folder")
+                .foregroundStyle(.secondary)
+            Text(name)
+                .font(AppFont.metadataTitle)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 14)
+        .frame(maxWidth: .infinity, minHeight: 22, alignment: .leading)
+        .background(.bar)
+    }
+}
+
+/// 합집합 파일 목록의 행 하나.
+private struct ChangedFileRow: View {
+    let file: MergedChangedFile
+    let isSelected: Bool
+    let onSelect: () -> Void
+
+    var body: some View {
+        Button(action: onSelect) {
+            HStack(spacing: 7) {
+                // rename/copy 는 "R100" 처럼 4글자라 11pt 고정폭 기준
+                // 약 27pt 가 필요하다. 좁으면 두 줄로 접혀 25pt 행 리듬이 깨진다.
+                Text(file.representativeStatus)
+                    .font(AppFont.badgeMono)
+                    .foregroundStyle(statusColor(file.representativeStatus))
+                    .lineLimit(1)
+                    .frame(width: 30, alignment: .leading)
+                Image(systemName: "doc.text")
+                    .foregroundStyle(.secondary)
+                Text(file.path)
+                    .font(AppFont.rowLabel)
+                    .lineLimit(1)
+                Spacer(minLength: 0)
+                // 여러 커밋이 건드린 파일만 커밋 수를 밝힌다. 단일 선택 화면은 그대로다.
+                if file.commits.count > 1 {
+                    Text("\(file.commits.count)")
+                        .font(AppFont.badgeMono)
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 5)
+                        .padding(.vertical, 1)
+                        .background(
+                            Capsule().fill(AppColor.cardSurface)
+                        )
+                        .help("커밋 \(file.commits.count)개에서 변경됨")
+                }
+            }
+            .padding(.horizontal, 9)
+            .frame(maxWidth: .infinity, minHeight: 25, alignment: .leading)
+            .appGlassSelection(isSelected)
+            .padding(.horizontal, 5)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help(file.statusTooltip ?? file.path)
     }
 
     private func statusColor(_ status: String) -> Color {
@@ -492,6 +640,8 @@ private struct DiffView: View {
     private func foreground(for kind: DiffLine.Kind) -> Color {
         switch kind {
         case .fileHeader, .hunkHeader: return .secondary
+        // 이어붙인 patch 의 경계는 diff 내용이 아니라 이정표다. 강조색으로 눈에 걸리게 한다.
+        case .commitHeader: return Color.accentColor
         case .addition: return AppStatusColor.success
         case .deletion: return AppStatusColor.danger
         case .context: return .primary
@@ -501,6 +651,7 @@ private struct DiffView: View {
     private func background(for kind: DiffLine.Kind) -> Color {
         switch kind {
         case .hunkHeader: return AppStatusColor.progressFill.opacity(highlightOpacity)
+        case .commitHeader: return Color.accentColor.opacity(highlightOpacity)
         case .addition: return AppStatusColor.successFill.opacity(highlightOpacity)
         case .deletion: return AppStatusColor.dangerFill.opacity(highlightOpacity)
         case .fileHeader, .context: return .clear

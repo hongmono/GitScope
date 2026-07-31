@@ -6,14 +6,13 @@ import SwiftUI
 /// 쌓고, 창 너비에 따라 어떤 열을 보일지(`HistoryColumnVisibility`)만 결정한다.
 struct VirtualizedHistoryList: View {
     let rows: [CommitRow]
-    let selectedCommitID: CommitID?
+    let selectedCommitIDs: Set<CommitID>
     let graphColumnWidth: CGFloat
     let graphLaneCount: Int
     let showsRepositoryColumn: Bool
     let repositoryColorIndices: [RepositoryID: Int]
     let githubActionsByCommit: [CommitID: GitHubActionsSummary]
-    let onSelect: (GitCommit) -> Void
-    let onClearSelection: () -> Void
+    let onSelectionChange: ([GitCommit]) -> Void
     let onVisibleGraphLaneCountChange: (Int) -> Void
     /// 설정 토글이 바뀌면 이 값이 바뀌면서 `updateNSView` → 그래프 다시 그리기가 이어진다.
     @AppStorage(AppSettings.authorAvatarLookupEnabledKey)
@@ -35,15 +34,14 @@ struct VirtualizedHistoryList: View {
                 )
                 VirtualizedHistoryCollection(
                     rows: rows,
-                    selectedCommitID: selectedCommitID,
+                    selectedCommitIDs: selectedCommitIDs,
                     graphColumnWidth: visibility.graphColumnWidth,
                     laneSpacing: visibility.laneSpacing,
                     repositoryColorIndices: repositoryColorIndices,
                     githubActionsByCommit: githubActionsByCommit,
                     visibility: visibility,
                     showsRemoteAvatars: showsRemoteAvatars,
-                    onSelect: onSelect,
-                    onClearSelection: onClearSelection,
+                    onSelectionChange: onSelectionChange,
                     onVisibleGraphLaneCountChange: onVisibleGraphLaneCountChange
                 )
             }

@@ -51,9 +51,15 @@ final class AppModel {
     private(set) var searchedReferenceFoldersByKind: [GitReference.Kind: ReferenceFolder] = [:]
     private(set) var visibleRepositoryIDs: Set<RepositoryID> = []
     private(set) var rows: [CommitRow] = []
-    private(set) var selectedCommit: GitCommit?
-    private(set) var selectedDetails: CommitDetails?
-    private(set) var selectedFile: ChangedFile?
+    /// 히스토리에서 고른 커밋. 순서는 목록(타임라인) 순서를 따른다.
+    ///
+    /// 정규화(작업 중 행 축소·순서 정렬)는 `selectCommits(_:)` 한 곳에서만 한다.
+    private(set) var selectedCommits: [GitCommit] = []
+    /// 선택 커밋들의 details. 순서는 `selectedCommits` 와 같고, 로드에 실패한 커밋은 빠진다.
+    private(set) var selectedDetailsList: [CommitDetails] = []
+    /// 선택 커밋들의 변경 파일 합집합. `selectedDetailsList` 가 바뀔 때 한 번만 만든다.
+    private(set) var mergedChangedFiles: [MergedChangedFile] = []
+    private(set) var selectedFile: MergedChangedFile?
     private(set) var selectedPatch: String?
     private(set) var githubActionsByCommit: [CommitID: GitHubActionsSummary] = [:]
     private(set) var selectedGitHubChecks: [GitHubCheckRun] = []
@@ -359,6 +365,24 @@ final class AppModel {
                 .localizedLowercase
                 .contains(search) == true
         }
+    }
+
+    /// 단일 선택일 때의 커밋.
+    ///
+    /// Actions 체크·팝오버·그래프 강조처럼 커밋 하나를 전제하는 코드가 그대로 쓰는 파생 값이다.
+    /// 다중 선택에서는 nil 이라, 단일 선택 전용 화면이 저절로 빠진다.
+    var selectedCommit: GitCommit? {
+        selectedCommits.count == 1 ? selectedCommits[0] : nil
+    }
+
+    /// 목록이 선택 표시를 맞추는 데 쓰는 ID 집합.
+    var selectedCommitIDs: Set<CommitID> {
+        Set(selectedCommits.map(\.id))
+    }
+
+    /// 저장소가 둘 이상 걸린 선택. 합집합 파일 목록에 저장소별 섹션 헤더를 붙일지 판단한다.
+    var selectionSpansMultipleRepositories: Bool {
+        Set(selectedCommits.map(\.id.repositoryID)).count > 1
     }
 
     var workspaceURL: URL? {
@@ -1094,36 +1118,132 @@ final class AppModel {
     }
 
     func selectCommit(_ commit: GitCommit) {
-        guard selectedCommit?.id != commit.id else { return }
-        selectedCommit = commit
-        selectedDetails = nil
+        selectCommits([commit])
+    }
+
+    /// 다중 선택의 유일한 진입점.
+    ///
+    /// 목록(뷰)이 알려 준 선택을 그대로 믿지 않고 여기서 한 번만 정규화한다. 작업 중 행이
+    /// 섞이면 그 행 하나로 접히고, 비어 있으면 선택 해제이며, 나머지는 목록 순서로 정렬된다.
+    func selectCommits(_ commits: [GitCommit]) {
+        let normalized = CommitSelection.normalize(commits, rowOrder: rows.lazy.map(\.id))
+        guard !normalized.isEmpty else {
+            clearSelection()
+            return
+        }
+        guard normalized.map(\.id) != selectedCommits.map(\.id) else {
+            // 정규화가 뭔가를 걷어냈다면 목록은 아직 정규화 전 선택을 그리고 있다. 관찰
+            // 대상이 바뀌지 않으면 되돌려 그릴 기회가 없으므로 같은 값을 다시 대입해 깨운다.
+            if commits.count != normalized.count {
+                selectedCommits = normalized
+            }
+            return
+        }
+
+        selectedCommits = normalized
+        selectedDetailsList = []
+        mergedChangedFiles = []
         selectedFile = nil
         selectedPatch = nil
         detailsTask?.cancel()
         patchTask?.cancel()
         isLoadingPatch = false
-        loadSelectedGitHubChecks(for: commit)
+        // Actions 체크 상세는 단일 선택일 때만 의미가 있다. 다중 선택에서는 이전 커밋의
+        // 체크가 남지 않도록 비우기만 한다.
+        if let onlyCommit = selectedCommit {
+            loadSelectedGitHubChecks(for: onlyCommit)
+        } else {
+            clearSelectedGitHubChecks()
+        }
 
-        guard let repository = repositories.first(where: { $0.id == commit.id.repositoryID }) else { return }
+        loadSelectedDetails(for: normalized)
+    }
+
+    /// 선택 커밋들의 details 를 병렬로 읽어 합집합 파일 목록까지 만든다.
+    ///
+    /// 일부 커밋만 실패하면 성공한 커밋들로 목록을 세우고 실패는 `errorMessage` 로 알린다.
+    /// 전부 실패하면 목록 없이 오류만 남는다.
+    private func loadSelectedDetails(for commits: [GitCommit]) {
+        let targets = commits.compactMap { commit -> (GitCommit, GitRepository)? in
+            guard let repository = repositories.first(where: {
+                $0.id == commit.id.repositoryID
+            }) else {
+                return nil
+            }
+            return (commit, repository)
+        }
+        // 선택한 커밋의 저장소가 하나도 남아 있지 않다면 읽을 것이 없다. 앞선 로드가
+        // 취소되며 켜 둔 진행 표시가 남지 않도록 여기서 내린다.
+        guard !targets.isEmpty else {
+            isLoadingDetails = false
+            return
+        }
+
+        let selectionIDs = commits.map(\.id)
         isLoadingDetails = true
         detailsTask = Task {
-            do {
-                let details = try await loader.loadDetails(commit: commit, repository: repository)
-                guard !Task.isCancelled else { return }
-                selectedDetails = details
-            } catch {
-                guard !Task.isCancelled else { return }
-                errorMessage = error.localizedDescription
+            let outcomes = await withTaskGroup(
+                of: (CommitID, Result<CommitDetails, any Error>).self
+            ) { group in
+                for (commit, repository) in targets {
+                    group.addTask { [loader] in
+                        do {
+                            return (
+                                commit.id,
+                                .success(
+                                    try await loader.loadDetails(
+                                        commit: commit,
+                                        repository: repository
+                                    )
+                                )
+                            )
+                        } catch {
+                            return (commit.id, .failure(error))
+                        }
+                    }
+                }
+                var results: [CommitID: Result<CommitDetails, any Error>] = [:]
+                for await (commitID, result) in group {
+                    results[commitID] = result
+                }
+                return results
             }
-            if !Task.isCancelled {
-                isLoadingDetails = false
+
+            // 로드가 도는 사이 선택이 바뀌었으면 버려진 선택의 결과다.
+            guard !Task.isCancelled, selectedCommits.map(\.id) == selectionIDs else { return }
+
+            var details: [CommitDetails] = []
+            var failures: [String] = []
+            for (commit, repository) in targets {
+                switch outcomes[commit.id] {
+                case .success(let loaded):
+                    details.append(loaded)
+                case .failure(let error):
+                    failures.append(
+                        "\(repository.name) · \(commit.shortOID): \(error.localizedDescription)"
+                    )
+                case nil:
+                    continue
+                }
+            }
+
+            selectedDetailsList = details
+            mergedChangedFiles = MergedChangedFile.merge(details)
+            isLoadingDetails = false
+            if !failures.isEmpty {
+                errorMessage = failures.joined(separator: "\n\n")
             }
         }
     }
 
-    func selectChangedFile(_ file: ChangedFile) {
-        guard let commit = selectedCommit,
-              let repository = repositories.first(where: { $0.id == commit.id.repositoryID }) else {
+    /// 합집합 목록의 파일 하나를 연다.
+    ///
+    /// 그 파일을 건드린 선택 커밋의 patch 를 오래된 순으로 이어붙인다. 단일 선택이면 헤더
+    /// 없이 patch 하나만 보여 주므로 기존 화면과 같다.
+    func selectChangedFile(_ file: MergedChangedFile) {
+        guard let repository = repositories.first(where: {
+            $0.id == file.repositoryID
+        }) else {
             return
         }
         guard selectedFile?.id != file.id || selectedPatch == nil else { return }
@@ -1133,25 +1253,40 @@ final class AppModel {
         isLoadingPatch = true
         patchTask?.cancel()
 
+        let selectionIDs = selectedCommits.map(\.id)
+        let showsCommitHeaders = file.commits.count > 1
         patchTask = Task {
             do {
-                let patch = try await loader.loadPatch(
-                    commit: commit,
-                    repository: repository,
-                    file: file
-                )
+                var sections: [CommitPatchSection] = []
+                for commit in file.commits {
+                    guard let changedFile = file.changedFilesByCommit[commit.id] else { continue }
+                    let patch = try await loader.loadPatch(
+                        commit: commit,
+                        repository: repository,
+                        file: changedFile
+                    )
+                    guard !Task.isCancelled,
+                          selectedCommits.map(\.id) == selectionIDs,
+                          selectedFile?.id == file.id else {
+                        return
+                    }
+                    sections.append(CommitPatchSection(commit: commit, patch: patch))
+                }
                 guard !Task.isCancelled,
-                      selectedCommit?.id == commit.id,
+                      selectedCommits.map(\.id) == selectionIDs,
                       selectedFile?.id == file.id else {
                     return
                 }
-                selectedPatch = patch
+                selectedPatch = CommitPatchSection.join(
+                    sections,
+                    showsCommitHeaders: showsCommitHeaders
+                )
             } catch {
                 guard !Task.isCancelled else { return }
                 errorMessage = error.localizedDescription
             }
             if !Task.isCancelled,
-               selectedCommit?.id == commit.id,
+               selectedCommits.map(\.id) == selectionIDs,
                selectedFile?.id == file.id {
                 isLoadingPatch = false
             }
@@ -1159,18 +1294,24 @@ final class AppModel {
     }
 
     func clearSelection() {
-        selectedCommit = nil
-        selectedDetails = nil
+        selectedCommits = []
+        selectedDetailsList = []
+        mergedChangedFiles = []
         selectedFile = nil
         selectedPatch = nil
         detailsTask?.cancel()
         patchTask?.cancel()
+        clearSelectedGitHubChecks()
+        isLoadingDetails = false
+        isLoadingPatch = false
+    }
+
+    /// 진행 중인 Actions 체크 조회를 접고 결과도 비운다. 선택 해제와 다중 선택이 함께 쓴다.
+    private func clearSelectedGitHubChecks() {
         selectedGitHubChecksTask?.cancel()
         selectedGitHubChecksTask = nil
         selectedGitHubChecks.removeAll(keepingCapacity: false)
         selectedGitHubChecksCommitID = nil
-        isLoadingDetails = false
-        isLoadingPatch = false
         isLoadingSelectedGitHubChecks = false
     }
 
@@ -1308,7 +1449,7 @@ final class AppModel {
         guard !uniqueURLs.isEmpty else { return }
         let preservedSelection: QuietSelection? = isQuiet
             ? QuietSelection(
-                commitID: selectedCommit?.id,
+                commitIDs: selectedCommits.map(\.id),
                 referenceGroupID: selectedReferenceGroupID,
                 repositoryScope: repositoryScope,
                 isCurrentBranchesSelected: isCurrentBranchesSelected
@@ -1394,7 +1535,7 @@ final class AppModel {
 
     /// 조용한 갱신 전에 붙잡아 두는, 사용자가 보고 있던 선택 상태.
     private struct QuietSelection {
-        let commitID: CommitID?
+        let commitIDs: [CommitID]
         let referenceGroupID: String?
         let repositoryScope: RepositoryID?
         let isCurrentBranchesSelected: Bool
@@ -1404,11 +1545,22 @@ final class AppModel {
     ///
     /// 선택 커밋이 새 목록에 남아 있는지는 `rebuildRowsImmediately()` 가 이미 판단했으므로
     /// 그 결과를 존중하고, 커밋 인스턴스만 새로 읽은 것으로 바꿔 브랜치·태그 배지를 최신화한다.
+    /// 사라진 커밋(rebase·amend 등)은 남은 것만 복원한다.
     private func restoreQuietSelection(_ selection: QuietSelection) {
-        if let commitID = selection.commitID,
-           selectedCommit?.id == commitID,
-           let refreshedCommit = allCommits.first(where: { $0.id == commitID }) {
-            selectedCommit = refreshedCommit
+        if !selection.commitIDs.isEmpty {
+            let refreshed = CommitSelection.restorable(
+                commitIDs: selection.commitIDs,
+                survivingIDs: Set(selectedCommits.map(\.id)),
+                in: allCommits
+            )
+            if refreshed.isEmpty {
+                clearSelection()
+            } else if refreshed.map(\.id) != selectedCommits.map(\.id) {
+                // 선택 자체가 줄었으므로 details 도 남은 커밋 기준으로 다시 읽어야 한다.
+                selectCommits(refreshed)
+            } else {
+                selectedCommits = refreshed
+            }
         }
 
         if selection.isCurrentBranchesSelected {
@@ -1494,8 +1646,9 @@ final class AppModel {
         // 다시 채운다.
         branchScope = .empty
         branchScopeMenuItems.removeAll(keepingCapacity: false)
-        selectedCommit = nil
-        selectedDetails = nil
+        selectedCommits.removeAll(keepingCapacity: false)
+        selectedDetailsList.removeAll(keepingCapacity: false)
+        mergedChangedFiles.removeAll(keepingCapacity: false)
         selectedFile = nil
         selectedPatch = nil
         selectedReference = nil
@@ -1620,8 +1773,15 @@ final class AppModel {
         guard generation == rowsGeneration else { return }
         rowsTask = nil
         rows = newRows
-        if let selectedCommit, !newRows.contains(where: { $0.id == selectedCommit.id }) {
+        guard !selectedCommits.isEmpty else { return }
+        // 필터·갱신으로 목록에서 사라진 커밋은 선택에서 뺀다. 전부 사라지면 선택 해제다.
+        let visibleIDs = Set(newRows.map(\.id))
+        let surviving = selectedCommits.filter { visibleIDs.contains($0.id) }
+        guard surviving.count != selectedCommits.count else { return }
+        if surviving.isEmpty {
             clearSelection()
+        } else {
+            selectCommits(surviving)
         }
     }
 

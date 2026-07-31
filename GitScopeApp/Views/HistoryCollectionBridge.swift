@@ -25,15 +25,16 @@ private final class ResizeAwareCollectionView: NSCollectionView {
 
 struct VirtualizedHistoryCollection: NSViewRepresentable {
     let rows: [CommitRow]
-    let selectedCommitID: CommitID?
+    let selectedCommitIDs: Set<CommitID>
     let graphColumnWidth: CGFloat
     let laneSpacing: CGFloat
     let repositoryColorIndices: [RepositoryID: Int]
     let githubActionsByCommit: [CommitID: GitHubActionsSummary]
     let visibility: HistoryColumnVisibility
     let showsRemoteAvatars: Bool
-    let onSelect: (GitCommit) -> Void
-    let onClearSelection: () -> Void
+    /// 선택이 바뀔 때마다 개별 행이 아니라 지금 선택된 커밋 **전체**를 넘긴다.
+    /// 정규화는 모델(`AppModel.selectCommits`)이 맡는다.
+    let onSelectionChange: ([GitCommit]) -> Void
     let onVisibleGraphLaneCountChange: (Int) -> Void
 
     func makeCoordinator() -> Coordinator {
@@ -51,7 +52,8 @@ struct VirtualizedHistoryCollection: NSViewRepresentable {
         collectionView.delegate = context.coordinator
         collectionView.prefetchDataSource = context.coordinator
         collectionView.isSelectable = true
-        collectionView.allowsMultipleSelection = false
+        // ⌘/⇧클릭 제스처는 NSCollectionView 가 그대로 처리한다.
+        collectionView.allowsMultipleSelection = true
         collectionView.allowsEmptySelection = true
         collectionView.backgroundColors = [.clear]
         collectionView.register(
@@ -89,15 +91,14 @@ struct VirtualizedHistoryCollection: NSViewRepresentable {
         context.coordinator.graphOverlayView = graphOverlayView
         context.coordinator.apply(
             rows: rows,
-            selectedCommitID: selectedCommitID,
+            selectedCommitIDs: selectedCommitIDs,
             graphColumnWidth: graphColumnWidth,
             laneSpacing: laneSpacing,
             repositoryColorIndices: repositoryColorIndices,
             githubActionsByCommit: githubActionsByCommit,
             visibility: visibility,
             showsRemoteAvatars: showsRemoteAvatars,
-            onSelect: onSelect,
-            onClearSelection: onClearSelection,
+            onSelectionChange: onSelectionChange,
             onVisibleGraphLaneCountChange: onVisibleGraphLaneCountChange
         )
         return scrollView
@@ -106,15 +107,14 @@ struct VirtualizedHistoryCollection: NSViewRepresentable {
     func updateNSView(_ scrollView: NSScrollView, context: Context) {
         context.coordinator.apply(
             rows: rows,
-            selectedCommitID: selectedCommitID,
+            selectedCommitIDs: selectedCommitIDs,
             graphColumnWidth: graphColumnWidth,
             laneSpacing: laneSpacing,
             repositoryColorIndices: repositoryColorIndices,
             githubActionsByCommit: githubActionsByCommit,
             visibility: visibility,
             showsRemoteAvatars: showsRemoteAvatars,
-            onSelect: onSelect,
-            onClearSelection: onClearSelection,
+            onSelectionChange: onSelectionChange,
             onVisibleGraphLaneCountChange: onVisibleGraphLaneCountChange
         )
     }
@@ -140,7 +140,7 @@ struct VirtualizedHistoryCollection: NSViewRepresentable {
         /// 선택 동기화의 `firstIndex(of:)` O(n) 탐색을 대신하는 역색인.
         /// 행 목록이 실제로 바뀔 때만 다시 만든다.
         private var rowIndicesByID: [CommitID: Int] = [:]
-        private var selectedCommitID: CommitID?
+        private var selectedCommitIDs: Set<CommitID> = []
         private var graphColumnWidth: CGFloat = 112
         private var laneSpacing: CGFloat = 18
         private var repositoryColorIndices: [RepositoryID: Int] = [:]
@@ -152,8 +152,7 @@ struct VirtualizedHistoryCollection: NSViewRepresentable {
             showsRepository: true
         )
         private var showsRemoteAvatars = AppSettings.isAuthorAvatarLookupEnabled
-        private var onSelect: ((GitCommit) -> Void)?
-        private var onClearSelection: (() -> Void)?
+        private var onSelectionChange: (([GitCommit]) -> Void)?
         private var onVisibleGraphLaneCountChange: ((Int) -> Void)?
         private var visibleGraphLaneCount = 0
         /// 아바타 프리페치에 필요한 최소 정보. 큐가 `GitCommit` 전체(본문·참조 포함)를
@@ -173,15 +172,14 @@ struct VirtualizedHistoryCollection: NSViewRepresentable {
 
         func apply(
             rows: [CommitRow],
-            selectedCommitID: CommitID?,
+            selectedCommitIDs: Set<CommitID>,
             graphColumnWidth: CGFloat,
             laneSpacing: CGFloat,
             repositoryColorIndices: [RepositoryID: Int],
             githubActionsByCommit: [CommitID: GitHubActionsSummary],
             visibility: HistoryColumnVisibility,
             showsRemoteAvatars: Bool,
-            onSelect: @escaping (GitCommit) -> Void,
-            onClearSelection: @escaping () -> Void,
+            onSelectionChange: @escaping ([GitCommit]) -> Void,
             onVisibleGraphLaneCountChange: @escaping (Int) -> Void
         ) {
             // 배열 버퍼가 같으면 `==` 가 O(1) 로 끝나므로, 매 updateNSView 마다 `map(\.id)`
@@ -191,7 +189,7 @@ struct VirtualizedHistoryCollection: NSViewRepresentable {
                 && (self.rows.count != rows.count
                     || zip(self.rows, rows).contains { $0.id != $1.id })
             let presentationChanged = rowContentChanged
-                || self.selectedCommitID != selectedCommitID
+                || self.selectedCommitIDs != selectedCommitIDs
                 || self.graphColumnWidth != graphColumnWidth
                 || self.laneSpacing != laneSpacing
                 || self.repositoryColorIndices != repositoryColorIndices
@@ -201,13 +199,12 @@ struct VirtualizedHistoryCollection: NSViewRepresentable {
             self.rows = rows
             self.repositoryColorIndices = repositoryColorIndices
             self.githubActionsByCommit = githubActionsByCommit
-            self.selectedCommitID = selectedCommitID
+            self.selectedCommitIDs = selectedCommitIDs
             self.graphColumnWidth = graphColumnWidth
             self.laneSpacing = laneSpacing
             self.visibility = visibility
             self.showsRemoteAvatars = showsRemoteAvatars
-            self.onSelect = onSelect
-            self.onClearSelection = onClearSelection
+            self.onSelectionChange = onSelectionChange
             self.onVisibleGraphLaneCountChange = onVisibleGraphLaneCountChange
 
             if rowsChanged {
@@ -260,23 +257,28 @@ struct VirtualizedHistoryCollection: NSViewRepresentable {
             _ collectionView: NSCollectionView,
             didSelectItemsAt indexPaths: Set<IndexPath>
         ) {
-            guard !isSynchronizingSelection,
-                  let index = indexPaths.first?.item,
-                  index < rows.count else {
-                return
-            }
-            onSelect?(rows[index].commit)
+            reportSelectionChange(in: collectionView)
         }
 
         func collectionView(
             _ collectionView: NSCollectionView,
             didDeselectItemsAt indexPaths: Set<IndexPath>
         ) {
-            guard !isSynchronizingSelection,
-                  collectionView.selectionIndexPaths.isEmpty else {
-                return
-            }
-            onClearSelection?()
+            reportSelectionChange(in: collectionView)
+        }
+
+        /// 방금 눌린 행이 아니라 지금 선택된 행 전체를 모아 모델에 넘긴다.
+        ///
+        /// ⌘/⇧클릭은 선택과 해제 콜백이 뒤섞여 오므로 개별 IndexPath 를 쌓아 두면 뷰와
+        /// 모델의 선택이 어긋나기 쉽다. 선택의 원본은 언제나 `selectionIndexPaths` 다.
+        private func reportSelectionChange(in collectionView: NSCollectionView) {
+            guard !isSynchronizingSelection else { return }
+            let commits = collectionView.selectionIndexPaths
+                .map(\.item)
+                .sorted()
+                .filter { $0 < rows.count }
+                .map { rows[$0].commit }
+            onSelectionChange?(commits)
         }
 
         func collectionView(
@@ -431,7 +433,7 @@ struct VirtualizedHistoryCollection: NSViewRepresentable {
             )
             graphOverlayView.configure(
                 rows: rows,
-                selectedCommitID: selectedCommitID,
+                selectedCommitIDs: selectedCommitIDs,
                 laneSpacing: laneSpacing,
                 contentOffsetY: visibleRect.minY,
                 showsRemoteAvatars: showsRemoteAvatars
@@ -484,22 +486,26 @@ struct VirtualizedHistoryCollection: NSViewRepresentable {
                 rowIndex: index,
                 graphColumnWidth: graphColumnWidth,
                 laneSpacing: laneSpacing,
-                isSelected: selectedCommitID == row.id,
+                isSelected: selectedCommitIDs.contains(row.id),
                 repositoryColorIndex: repositoryColorIndices[repositoryID] ?? 0,
                 githubActionsSummary: githubActionsByCommit[row.id],
                 visibility: visibility
             )
         }
 
+        /// 모델이 정규화한 선택을 뷰에 되돌려 그린다.
+        ///
+        /// 작업 중 행이 섞였을 때처럼 모델이 선택을 접으면 뷰의 `selectionIndexPaths` 와
+        /// 어긋나므로, 여기서 다시 맞춘다. 이때 도는 델리게이트 콜백이 모델을 또 건드리지
+        /// 않도록 `isSynchronizingSelection` 가드를 건다.
         private func synchronizeSelection() {
             guard let collectionView else { return }
-            let selection: Set<IndexPath>
-            if let selectedCommitID,
-               let index = rowIndicesByID[selectedCommitID] {
-                selection = [IndexPath(item: index, section: 0)]
-            } else {
-                selection = []
-            }
+            let selection = Set(
+                selectedCommitIDs.compactMap { commitID -> IndexPath? in
+                    guard let index = rowIndicesByID[commitID] else { return nil }
+                    return IndexPath(item: index, section: 0)
+                }
+            )
 
             guard collectionView.selectionIndexPaths != selection else { return }
             isSynchronizingSelection = true
