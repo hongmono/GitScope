@@ -112,30 +112,94 @@ final class MultiCommitSelectionTests: XCTestCase {
 
         let normalized = CommitSelection.normalize(
             [third, first, second],
+            latest: [],
             rowOrder: [first.id, second.id, third.id]
         )
 
-        XCTAssertEqual(normalized.map(\.id.oid), ["aaa", "bbb", "ccc"])
+        XCTAssertEqual(normalized.commits.map(\.id.oid), ["aaa", "bbb", "ccc"])
+        // 걷어낸 것이 없으면 목록은 이미 모델과 같은 선택을 그리고 있다.
+        XCTAssertFalse(normalized.requiresViewSync)
     }
 
-    func testNormalizeCollapsesToWorkingTreeCommitWhenIncluded() {
+    func testNormalizeCollapsesToWorkingTreeWhenItIsTheClickedRow() {
         let working = workingTreeCommit()
         let regular = commit("aaa", at: 100)
 
-        XCTAssertEqual(
-            CommitSelection.normalize([regular, working], rowOrder: [working.id, regular.id])
-                .map(\.id.oid),
-            ["WORKTREE"]
+        // 커밋이 선택된 상태에서 작업 중 행을 ⌘클릭하면 작업 중 행 단일 선택이 된다.
+        let normalized = CommitSelection.normalize(
+            [working, regular],
+            latest: [working],
+            rowOrder: [working.id, regular.id]
         )
-        XCTAssertEqual(
-            CommitSelection.normalize([working, regular], rowOrder: [working.id, regular.id])
-                .map(\.id.oid),
-            ["WORKTREE"]
+
+        XCTAssertEqual(normalized.commits.map(\.id.oid), ["WORKTREE"])
+        XCTAssertTrue(normalized.requiresViewSync)
+    }
+
+    func testNormalizeSelectsClickedCommitWhenWorkingTreeWasTheAnchor() {
+        let working = workingTreeCommit()
+        let clicked = commit("aaa", at: 100)
+
+        // 작업 중 행이 선택된 상태에서 다른 커밋을 ⌘클릭하면 그 커밋의 단일 선택으로 바뀐다.
+        // (작업 중 행을 남기면 화면이 그대로라 클릭이 먹지 않은 것처럼 보인다)
+        let normalized = CommitSelection.normalize(
+            [working, clicked],
+            latest: [clicked],
+            rowOrder: [working.id, clicked.id]
         )
+
+        XCTAssertEqual(normalized.commits.map(\.id.oid), ["aaa"])
+        XCTAssertTrue(normalized.requiresViewSync)
+    }
+
+    func testNormalizeDropsWorkingTreeFromAShiftClickRange() {
+        let working = workingTreeCommit()
+        let first = commit("aaa", at: 200)
+        let second = commit("bbb", at: 100)
+
+        // 작업 중 행을 앵커로 ⇧클릭하면 범위에 작업 중 행이 딸려 온다. 커밋 쪽을 살린다.
+        let normalized = CommitSelection.normalize(
+            [working, first, second],
+            latest: [working, first, second],
+            rowOrder: [working.id, first.id, second.id]
+        )
+
+        XCTAssertEqual(normalized.commits.map(\.id.oid), ["aaa", "bbb"])
+        XCTAssertTrue(normalized.requiresViewSync)
+    }
+
+    func testNormalizeKeepsWorkingTreeWhenItIsTheOnlySelection() {
+        let working = workingTreeCommit()
+
+        let normalized = CommitSelection.normalize(
+            [working],
+            latest: [working],
+            rowOrder: [working.id]
+        )
+
+        XCTAssertEqual(normalized.commits.map(\.id.oid), ["WORKTREE"])
+        XCTAssertFalse(normalized.requiresViewSync)
+    }
+
+    func testNormalizeDropsWorkingTreeWithoutAClickedRow() {
+        let working = workingTreeCommit()
+        let regular = commit("aaa", at: 100)
+
+        // 클릭 정보가 없는 경로(갱신 뒤 정리 등)에서는 커밋 쪽을 남긴다.
+        let normalized = CommitSelection.normalize(
+            [working, regular],
+            latest: [],
+            rowOrder: [working.id, regular.id]
+        )
+
+        XCTAssertEqual(normalized.commits.map(\.id.oid), ["aaa"])
+        XCTAssertTrue(normalized.requiresViewSync)
     }
 
     func testNormalizeReturnsEmptyForEmptySelection() {
-        XCTAssertTrue(CommitSelection.normalize([], rowOrder: [CommitID]()).isEmpty)
+        let normalized = CommitSelection.normalize([], latest: [], rowOrder: [CommitID]())
+        XCTAssertTrue(normalized.commits.isEmpty)
+        XCTAssertFalse(normalized.requiresViewSync)
     }
 
     func testNormalizeKeepsCommitsMissingFromRowOrderAtTheEnd() {
@@ -144,10 +208,13 @@ final class MultiCommitSelectionTests: XCTestCase {
 
         let normalized = CommitSelection.normalize(
             [filtered, visible],
+            latest: [],
             rowOrder: [visible.id]
         )
 
-        XCTAssertEqual(normalized.map(\.id.oid), ["aaa", "zzz"])
+        XCTAssertEqual(normalized.commits.map(\.id.oid), ["aaa", "zzz"])
+        // 순서만 바뀐 것은 뷰의 선택 집합과 어긋나지 않는다.
+        XCTAssertFalse(normalized.requiresViewSync)
     }
 
     func testNormalizeRemovesDuplicateCommits() {
@@ -156,10 +223,25 @@ final class MultiCommitSelectionTests: XCTestCase {
         XCTAssertEqual(
             CommitSelection.normalize(
                 [duplicated, duplicated],
+                latest: [],
                 rowOrder: [duplicated.id]
-            ).count,
+            ).commits.count,
             1
         )
+    }
+
+    // MARK: - ⇧클릭 범위
+
+    func testRangeIndexesCoversBothDirections() {
+        XCTAssertEqual(CommitSelection.rangeIndexes(anchor: 2, clicked: 5, rowCount: 7), [2, 3, 4, 5])
+        XCTAssertEqual(CommitSelection.rangeIndexes(anchor: 5, clicked: 2, rowCount: 7), [2, 3, 4, 5])
+        XCTAssertEqual(CommitSelection.rangeIndexes(anchor: 3, clicked: 3, rowCount: 7), [3])
+    }
+
+    func testRangeIndexesRejectsOutOfBoundsRows() {
+        XCTAssertTrue(CommitSelection.rangeIndexes(anchor: 0, clicked: 9, rowCount: 7).isEmpty)
+        XCTAssertTrue(CommitSelection.rangeIndexes(anchor: -1, clicked: 3, rowCount: 7).isEmpty)
+        XCTAssertTrue(CommitSelection.rangeIndexes(anchor: 0, clicked: 0, rowCount: 0).isEmpty)
     }
 
     // MARK: - 조용한 갱신 뒤 선택 복원

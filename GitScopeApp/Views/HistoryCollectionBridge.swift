@@ -8,6 +8,27 @@ private extension NSUserInterfaceItemIdentifier {
 
 private final class ResizeAwareCollectionView: NSCollectionView {
     var onWidthChange: (() -> Void)?
+    /// 눌린 행과 ⇧ 여부를 알린다. 참을 돌려주면 기본 처리를 건너뛴다.
+    ///
+    /// NSCollectionView 는 ⇧클릭을 앵커부터의 범위로 넓혀 주지 않는다(레이아웃이 격자라는
+    /// 전제 아래 동작한다). 한 줄짜리 히스토리 목록에서는 ⌘클릭과 똑같이 토글로 끝나므로
+    /// 범위 확장은 우리가 직접 처리한다.
+    var onMouseDown: ((IndexPath, Bool) -> Bool)?
+
+    override func mouseDown(with event: NSEvent) {
+        let point = convert(event.locationInWindow, from: nil)
+        guard let indexPath = indexPathForItem(at: point) else {
+            super.mouseDown(with: event)
+            return
+        }
+        // ⌘ 가 함께 눌린 ⇧클릭은 AppKit 의 기본 토글에 맡긴다.
+        let isRangeClick = event.modifierFlags.contains(.shift)
+            && !event.modifierFlags.contains(.command)
+        guard onMouseDown?(indexPath, isRangeClick) == true else {
+            super.mouseDown(with: event)
+            return
+        }
+    }
 
     override func setFrameSize(_ newSize: NSSize) {
         let widthChanged = abs(frame.width - newSize.width) > 0.5
@@ -26,15 +47,18 @@ private final class ResizeAwareCollectionView: NSCollectionView {
 struct VirtualizedHistoryCollection: NSViewRepresentable {
     let rows: [CommitRow]
     let selectedCommitIDs: Set<CommitID>
+    /// 모델이 선택을 접을 때마다 오르는 번호. 값 자체는 쓰지 않고, 이 값이 바뀌어야
+    /// SwiftUI 가 `updateNSView` 를 불러 목록을 되돌려 그릴 기회가 생긴다.
+    let selectionRevision: Int
     let graphColumnWidth: CGFloat
     let laneSpacing: CGFloat
     let repositoryColorIndices: [RepositoryID: Int]
     let githubActionsByCommit: [CommitID: GitHubActionsSummary]
     let visibility: HistoryColumnVisibility
     let showsRemoteAvatars: Bool
-    /// 선택이 바뀔 때마다 개별 행이 아니라 지금 선택된 커밋 **전체**를 넘긴다.
-    /// 정규화는 모델(`AppModel.selectCommits`)이 맡는다.
-    let onSelectionChange: ([GitCommit]) -> Void
+    /// 선택이 바뀔 때마다 개별 행이 아니라 지금 선택된 커밋 **전체**와, 이번에 방금
+    /// 선택된 행을 함께 넘긴다. 정규화는 모델(`AppModel.selectCommits`)이 맡는다.
+    let onSelectionChange: ([GitCommit], [GitCommit]) -> Void
     let onVisibleGraphLaneCountChange: (Int) -> Void
 
     func makeCoordinator() -> Coordinator {
@@ -52,7 +76,7 @@ struct VirtualizedHistoryCollection: NSViewRepresentable {
         collectionView.delegate = context.coordinator
         collectionView.prefetchDataSource = context.coordinator
         collectionView.isSelectable = true
-        // ⌘/⇧클릭 제스처는 NSCollectionView 가 그대로 처리한다.
+        // ⌘클릭 토글은 NSCollectionView 가 그대로 처리한다. ⇧클릭 범위만 위에서 가로챈다.
         collectionView.allowsMultipleSelection = true
         collectionView.allowsEmptySelection = true
         collectionView.backgroundColors = [.clear]
@@ -71,6 +95,9 @@ struct VirtualizedHistoryCollection: NSViewRepresentable {
         collectionView.autoresizingMask = [.width]
         collectionView.onWidthChange = { [weak coordinator = context.coordinator] in
             coordinator?.refreshVisibleRowsAfterResize()
+        }
+        collectionView.onMouseDown = { [weak coordinator = context.coordinator] indexPath, isRangeClick in
+            coordinator?.handleMouseDown(at: indexPath, isRangeClick: isRangeClick) ?? false
         }
 
         let graphOverlayView = VisibleCommitGraphView()
@@ -92,6 +119,7 @@ struct VirtualizedHistoryCollection: NSViewRepresentable {
         context.coordinator.apply(
             rows: rows,
             selectedCommitIDs: selectedCommitIDs,
+            selectionRevision: selectionRevision,
             graphColumnWidth: graphColumnWidth,
             laneSpacing: laneSpacing,
             repositoryColorIndices: repositoryColorIndices,
@@ -108,6 +136,7 @@ struct VirtualizedHistoryCollection: NSViewRepresentable {
         context.coordinator.apply(
             rows: rows,
             selectedCommitIDs: selectedCommitIDs,
+            selectionRevision: selectionRevision,
             graphColumnWidth: graphColumnWidth,
             laneSpacing: laneSpacing,
             repositoryColorIndices: repositoryColorIndices,
@@ -141,6 +170,7 @@ struct VirtualizedHistoryCollection: NSViewRepresentable {
         /// 행 목록이 실제로 바뀔 때만 다시 만든다.
         private var rowIndicesByID: [CommitID: Int] = [:]
         private var selectedCommitIDs: Set<CommitID> = []
+        private var selectionRevision = 0
         private var graphColumnWidth: CGFloat = 112
         private var laneSpacing: CGFloat = 18
         private var repositoryColorIndices: [RepositoryID: Int] = [:]
@@ -152,7 +182,7 @@ struct VirtualizedHistoryCollection: NSViewRepresentable {
             showsRepository: true
         )
         private var showsRemoteAvatars = AppSettings.isAuthorAvatarLookupEnabled
-        private var onSelectionChange: (([GitCommit]) -> Void)?
+        private var onSelectionChange: (([GitCommit], [GitCommit]) -> Void)?
         private var onVisibleGraphLaneCountChange: ((Int) -> Void)?
         private var visibleGraphLaneCount = 0
         /// 아바타 프리페치에 필요한 최소 정보. 큐가 `GitCommit` 전체(본문·참조 포함)를
@@ -169,17 +199,20 @@ struct VirtualizedHistoryCollection: NSViewRepresentable {
         private var prefetchCursor = 0
         private var prefetchTask: Task<Void, Never>?
         private var isSynchronizingSelection = false
+        /// ⇧클릭이 범위를 넓혀 갈 기준 행. ⇧ 없이 누른 마지막 행이다.
+        private var selectionAnchorIndex: Int?
 
         func apply(
             rows: [CommitRow],
             selectedCommitIDs: Set<CommitID>,
+            selectionRevision: Int,
             graphColumnWidth: CGFloat,
             laneSpacing: CGFloat,
             repositoryColorIndices: [RepositoryID: Int],
             githubActionsByCommit: [CommitID: GitHubActionsSummary],
             visibility: HistoryColumnVisibility,
             showsRemoteAvatars: Bool,
-            onSelectionChange: @escaping ([GitCommit]) -> Void,
+            onSelectionChange: @escaping ([GitCommit], [GitCommit]) -> Void,
             onVisibleGraphLaneCountChange: @escaping (Int) -> Void
         ) {
             // 배열 버퍼가 같으면 `==` 가 O(1) 로 끝나므로, 매 updateNSView 마다 `map(\.id)`
@@ -190,6 +223,7 @@ struct VirtualizedHistoryCollection: NSViewRepresentable {
                     || zip(self.rows, rows).contains { $0.id != $1.id })
             let presentationChanged = rowContentChanged
                 || self.selectedCommitIDs != selectedCommitIDs
+                || self.selectionRevision != selectionRevision
                 || self.graphColumnWidth != graphColumnWidth
                 || self.laneSpacing != laneSpacing
                 || self.repositoryColorIndices != repositoryColorIndices
@@ -200,6 +234,7 @@ struct VirtualizedHistoryCollection: NSViewRepresentable {
             self.repositoryColorIndices = repositoryColorIndices
             self.githubActionsByCommit = githubActionsByCommit
             self.selectedCommitIDs = selectedCommitIDs
+            self.selectionRevision = selectionRevision
             self.graphColumnWidth = graphColumnWidth
             self.laneSpacing = laneSpacing
             self.visibility = visibility
@@ -213,6 +248,7 @@ struct VirtualizedHistoryCollection: NSViewRepresentable {
                     indices[row.id] = index
                 }
                 rowIndicesByID = indices
+                selectionAnchorIndex = nil
                 pendingPrefetchRequests.removeAll(keepingCapacity: false)
                 queuedPrefetchKeys.removeAll(keepingCapacity: false)
                 prefetchCursor = 0
@@ -253,32 +289,76 @@ struct VirtualizedHistoryCollection: NSViewRepresentable {
             return item
         }
 
+        /// - Returns: 참이면 이 클릭을 여기서 처리했으므로 기본 동작을 돌리지 않는다.
+        func handleMouseDown(at indexPath: IndexPath, isRangeClick: Bool) -> Bool {
+            guard isRangeClick else {
+                // ⇧ 없이 누른 행이 다음 범위 선택의 기준이 된다.
+                selectionAnchorIndex = indexPath.item
+                return false
+            }
+            guard let collectionView,
+                  let anchor = selectionAnchorIndex
+                    ?? collectionView.selectionIndexPaths.map(\.item).min() else {
+                return false
+            }
+            let indexes = CommitSelection.rangeIndexes(
+                anchor: anchor,
+                clicked: indexPath.item,
+                rowCount: rows.count
+            )
+            guard !indexes.isEmpty else { return false }
+
+            let selection = Set(indexes.map { IndexPath(item: $0, section: 0) })
+            // 우리가 세운 선택이므로 델리게이트 콜백이 다시 모델을 건드리지 않게 막고,
+            // 모델에는 아래에서 한 번만 알린다.
+            isSynchronizingSelection = true
+            collectionView.selectionIndexPaths = selection
+            isSynchronizingSelection = false
+            updateVisibleItems()
+            updateGraphOverlay()
+            onSelectionChange?(commits(at: selection), commits(at: [indexPath]))
+            return true
+        }
+
         func collectionView(
             _ collectionView: NSCollectionView,
             didSelectItemsAt indexPaths: Set<IndexPath>
         ) {
-            reportSelectionChange(in: collectionView)
+            reportSelectionChange(in: collectionView, justSelected: indexPaths)
         }
 
         func collectionView(
             _ collectionView: NSCollectionView,
             didDeselectItemsAt indexPaths: Set<IndexPath>
         ) {
-            reportSelectionChange(in: collectionView)
+            // 해제에는 '방금 선택된 행' 이 없다. 작업 중 행 처리는 모델의 기본 규칙을 따른다.
+            reportSelectionChange(in: collectionView, justSelected: [])
         }
 
         /// 방금 눌린 행이 아니라 지금 선택된 행 전체를 모아 모델에 넘긴다.
         ///
         /// ⌘/⇧클릭은 선택과 해제 콜백이 뒤섞여 오므로 개별 IndexPath 를 쌓아 두면 뷰와
         /// 모델의 선택이 어긋나기 쉽다. 선택의 원본은 언제나 `selectionIndexPaths` 다.
-        private func reportSelectionChange(in collectionView: NSCollectionView) {
+        ///
+        /// 방금 선택된 행은 따로 넘긴다. 작업 중 행이 섞였을 때 어느 쪽을 남길지는 사용자가
+        /// 무엇을 눌렀는지로 갈리는데, 그 사실은 델리게이트만 알기 때문이다.
+        private func reportSelectionChange(
+            in collectionView: NSCollectionView,
+            justSelected: Set<IndexPath>
+        ) {
             guard !isSynchronizingSelection else { return }
-            let commits = collectionView.selectionIndexPaths
+            onSelectionChange?(
+                commits(at: collectionView.selectionIndexPaths),
+                commits(at: justSelected)
+            )
+        }
+
+        private func commits(at indexPaths: Set<IndexPath>) -> [GitCommit] {
+            indexPaths
                 .map(\.item)
                 .sorted()
                 .filter { $0 < rows.count }
                 .map { rows[$0].commit }
-            onSelectionChange?(commits)
         }
 
         func collectionView(

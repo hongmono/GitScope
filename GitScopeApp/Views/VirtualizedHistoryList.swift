@@ -7,12 +7,13 @@ import SwiftUI
 struct VirtualizedHistoryList: View {
     let rows: [CommitRow]
     let selectedCommitIDs: Set<CommitID>
+    let selectionRevision: Int
     let graphColumnWidth: CGFloat
     let graphLaneCount: Int
     let showsRepositoryColumn: Bool
     let repositoryColorIndices: [RepositoryID: Int]
     let githubActionsByCommit: [CommitID: GitHubActionsSummary]
-    let onSelectionChange: ([GitCommit]) -> Void
+    let onSelectionChange: ([GitCommit], [GitCommit]) -> Void
     let onVisibleGraphLaneCountChange: (Int) -> Void
     /// 설정 토글이 바뀌면 이 값이 바뀌면서 `updateNSView` → 그래프 다시 그리기가 이어진다.
     @AppStorage(AppSettings.authorAvatarLookupEnabledKey)
@@ -35,6 +36,7 @@ struct VirtualizedHistoryList: View {
                 VirtualizedHistoryCollection(
                     rows: rows,
                     selectedCommitIDs: selectedCommitIDs,
+                    selectionRevision: selectionRevision,
                     graphColumnWidth: visibility.graphColumnWidth,
                     laneSpacing: visibility.laneSpacing,
                     repositoryColorIndices: repositoryColorIndices,

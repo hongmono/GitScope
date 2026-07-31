@@ -8,7 +8,8 @@
 IntelliJ Git Log처럼 히스토리 목록에서 커밋 여러 개를 선택하면, 커밋 상세 영역에
 선택된 커밋들에서 수정된 파일을 한 번에 보여준다.
 
-- 다중 선택 제스처: 클릭(단일), ⌘클릭(토글), ⇧클릭(범위) — AppKit 기본 동작 사용
+- 다중 선택 제스처: 클릭(단일), ⌘클릭(토글), ⇧클릭(범위). 클릭·⌘클릭은 AppKit 기본
+  동작을 쓰고, ⇧클릭 범위만 직접 처리한다 (아래 "목록 다중 선택" 참고)
 - 변경 파일: 선택된 각 커밋의 변경 파일 **합집합** (범위 diff 아님 — 띄엄띄엄 선택해도
   선택한 커밋의 변경만 정확히 반영)
 - 파일 클릭 시: 그 파일을 건드린 선택 커밋들의 patch를 **커밋 오래된 순**으로 이어붙여
@@ -41,7 +42,13 @@ IntelliJ Git Log처럼 히스토리 목록에서 커밋 여러 개를 선택하�
 
 ### 목록 다중 선택 (HistoryCollectionBridge)
 
-- `allowsMultipleSelection = true`. ⌘/⇧클릭 제스처는 NSCollectionView가 처리한다.
+- `allowsMultipleSelection = true`. 클릭과 ⌘클릭(토글)은 NSCollectionView가 처리한다.
+- **⇧클릭 범위는 직접 처리한다.** NSCollectionView의 ⇧클릭은 격자 레이아웃을 전제로
+  동작해서, 한 줄짜리 커스텀 레이아웃(`VisibleRowsCollectionLayout`)에서는 범위로 넓혀
+  주지 않고 ⌘클릭과 똑같은 토글로 끝난다(양 끝 두 행만 선택되고 사이가 빈다 — 실기기
+  QA에서 확인). 그래서 `mouseDown`을 가로채 ⇧ 없이 누른 마지막 행을 앵커로 잡고,
+  앵커와 누른 행 사이를 직접 선택한 뒤 모델에 한 번만 알린다. 범위 계산 규칙은 모델
+  계층 순수 함수 `CommitSelection.rangeIndexes(anchor:clicked:rowCount:)`에 둔다.
 - `didSelectItemsAt`/`didDeselectItemsAt`에서 개별 IndexPath가 아니라
   `collectionView.selectionIndexPaths` **전체**를 커밋 배열로 변환해
   `onSelectionChange?([GitCommit])` 한 개의 콜백으로 모델에 전달한다.

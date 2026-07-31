@@ -681,19 +681,57 @@ struct MergedChangedFile: Identifiable, Hashable, Sendable {
 /// 작업 중 행 제약과 순서 정렬은 델리게이트가 아니라 여기 한 곳에만 둔다. 뷰가 알려 준
 /// 선택을 그대로 믿으면 ⌘클릭 조합마다 같은 규칙을 다시 구현하게 된다.
 enum CommitSelection {
-    /// - Parameter rowOrder: 히스토리 목록에 지금 보이는 행의 ID. 선택은 이 차례로 정렬된다.
-    /// - Returns: 작업 중 커밋이 섞이면 그 커밋 하나. 아니면 목록 순서로 정렬한 선택.
+    /// 정규화 결과.
+    struct Normalized {
+        let commits: [GitCommit]
+        /// 정규화가 들어온 선택에서 뭔가를 걷어냈는가.
+        ///
+        /// 참이면 목록(뷰)은 아직 정규화 전 선택을 그리고 있으므로 되돌려 그려야 한다.
+        /// 선택 커밋 자체는 그대로일 수 있으니(작업 중 행만 빠지는 경우) 결과 값 비교로는
+        /// 이 사실을 알 수 없다.
+        let requiresViewSync: Bool
+    }
+
+    /// - Parameters:
+    ///   - commits: 목록이 알려 준 선택 전체.
+    ///   - latest: 이번 조작으로 **방금 선택된** 행. 클릭이 아닌 경로(갱신 뒤 정리 등)는 빈 배열.
+    ///   - rowOrder: 히스토리 목록에 지금 보이는 행의 ID. 선택은 이 차례로 정렬된다.
+    /// - Returns: 방금 누른 곳이 작업 중 행뿐이면 그 행 하나. 아니면 작업 중 행을 뺀 나머지를
+    ///   목록 순서로 정렬한 선택.
     static func normalize<Rows: Sequence>(
         _ commits: [GitCommit],
+        latest: [GitCommit],
         rowOrder: Rows
-    ) -> [GitCommit] where Rows.Element == CommitID {
+    ) -> Normalized where Rows.Element == CommitID {
         // 작업 중 행은 커밋이 아니라 워킹 트리라 다른 커밋과 합집합을 만들 수 없다.
-        // 어느 쪽에서 들어오든 그 행 하나의 단일 선택으로 접는다.
-        if let workingTree = commits.first(where: \.isWorkingTree) { return [workingTree] }
-        guard commits.count > 1 else { return commits }
+        // 어느 쪽을 남길지는 방금 누른 곳이 정한다 — 작업 중 행을 눌렀으면 그 행 하나로
+        // 접고, 다른 커밋을 눌렀으면 작업 중 행을 뺀다. 늘 작업 중 행을 남기면 작업 중
+        // 행이 선택된 상태에서 무엇을 눌러도 화면이 그대로라 클릭이 먹지 않은 것처럼 보인다.
+        if !latest.isEmpty, latest.allSatisfy(\.isWorkingTree) {
+            let workingTree = Array(latest.prefix(1))
+            return Normalized(
+                commits: workingTree,
+                requiresViewSync: commits.count != workingTree.count
+            )
+        }
+
+        let selectable = commits.filter { !$0.isWorkingTree }
+        // 작업 중 행만 남았다면(단일 선택이거나 다른 행을 전부 해제한 경우) 그 행을 그대로 둔다.
+        guard !selectable.isEmpty else {
+            let workingTree = Array(commits.prefix(1))
+            return Normalized(
+                commits: workingTree,
+                requiresViewSync: commits.count != workingTree.count
+            )
+        }
+
+        let requiresViewSync = selectable.count != commits.count
+        guard selectable.count > 1 else {
+            return Normalized(commits: selectable, requiresViewSync: requiresViewSync)
+        }
 
         var remaining = Dictionary(
-            commits.map { ($0.id, $0) },
+            selectable.map { ($0.id, $0) },
             uniquingKeysWith: { first, _ in first }
         )
         var ordered: [GitCommit] = []
@@ -703,8 +741,22 @@ enum CommitSelection {
             ordered.append(commit)
         }
         // 목록에서 사라진(필터에 걸린) 커밋은 원래 순서대로 뒤에 붙인다.
-        ordered.append(contentsOf: commits.compactMap { remaining.removeValue(forKey: $0.id) })
-        return ordered
+        ordered.append(contentsOf: selectable.compactMap { remaining.removeValue(forKey: $0.id) })
+        return Normalized(
+            commits: ordered,
+            // 중복이 지워진 것도 뷰와 어긋난 상태다.
+            requiresViewSync: requiresViewSync || ordered.count != commits.count
+        )
+    }
+
+    /// ⇧클릭이 덮는 행 번호.
+    ///
+    /// 앵커가 위든 아래든 두 행 사이를 모두 포함한다. 목록 밖을 가리키면 빈 배열이다.
+    static func rangeIndexes(anchor: Int, clicked: Int, rowCount: Int) -> [Int] {
+        let lower = min(anchor, clicked)
+        let upper = max(anchor, clicked)
+        guard lower >= 0, upper < rowCount else { return [] }
+        return Array(lower...upper)
     }
 
     /// 조용한 갱신 뒤 되살릴 커밋.

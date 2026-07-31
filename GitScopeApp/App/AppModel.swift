@@ -61,6 +61,12 @@ final class AppModel {
     private(set) var mergedChangedFiles: [MergedChangedFile] = []
     private(set) var selectedFile: MergedChangedFile?
     private(set) var selectedPatch: String?
+    /// 정규화가 목록의 선택을 접을 때마다 오르는 번호.
+    ///
+    /// 목록을 되돌려 그리게 만드는 신호다. 선택 값만으로는 부족하다 — 작업 중 행만 빠지는
+    /// 경우처럼 정규화 결과가 이전 선택과 같으면 관찰 대상이 하나도 바뀌지 않아
+    /// `updateNSView` 가 불리지 않고, 뷰의 선택만 모델과 어긋난 채 쌓인다.
+    private(set) var selectionRevision = 0
     private(set) var githubActionsByCommit: [CommitID: GitHubActionsSummary] = [:]
     private(set) var selectedGitHubChecks: [GitHubCheckRun] = []
     private(set) var isLoadingSelectedGitHubChecks = false
@@ -1123,22 +1129,29 @@ final class AppModel {
 
     /// 다중 선택의 유일한 진입점.
     ///
-    /// 목록(뷰)이 알려 준 선택을 그대로 믿지 않고 여기서 한 번만 정규화한다. 작업 중 행이
-    /// 섞이면 그 행 하나로 접히고, 비어 있으면 선택 해제이며, 나머지는 목록 순서로 정렬된다.
-    func selectCommits(_ commits: [GitCommit]) {
-        let normalized = CommitSelection.normalize(commits, rowOrder: rows.lazy.map(\.id))
+    /// 목록(뷰)이 알려 준 선택을 그대로 믿지 않고 여기서 한 번만 정규화한다. 작업 중 행
+    /// 처리는 `latest` 가 가르고, 비어 있으면 선택 해제이며, 나머지는 목록 순서로 정렬된다.
+    ///
+    /// - Parameter latest: 이번 조작으로 방금 선택된 행. 목록이 알려 준다.
+    func selectCommits(_ commits: [GitCommit], latest: [GitCommit] = []) {
+        let result = CommitSelection.normalize(
+            commits,
+            latest: latest,
+            rowOrder: rows.lazy.map(\.id)
+        )
+        // 정규화가 뭔가를 걷어냈다면 목록은 아직 정규화 전 선택을 그리고 있다. 선택 커밋
+        // 자체는 그대로일 수 있어(작업 중 행만 빠지는 경우) 값 비교로는 목록을 깨울 수
+        // 없으므로, 값과 무관하게 늘 바뀌는 신호를 따로 올린다.
+        if result.requiresViewSync {
+            selectionRevision &+= 1
+        }
+
+        let normalized = result.commits
         guard !normalized.isEmpty else {
             clearSelection()
             return
         }
-        guard normalized.map(\.id) != selectedCommits.map(\.id) else {
-            // 정규화가 뭔가를 걷어냈다면 목록은 아직 정규화 전 선택을 그리고 있다. 관찰
-            // 대상이 바뀌지 않으면 되돌려 그릴 기회가 없으므로 같은 값을 다시 대입해 깨운다.
-            if commits.count != normalized.count {
-                selectedCommits = normalized
-            }
-            return
-        }
+        guard normalized.map(\.id) != selectedCommits.map(\.id) else { return }
 
         selectedCommits = normalized
         selectedDetailsList = []
